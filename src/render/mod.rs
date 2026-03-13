@@ -1,0 +1,210 @@
+mod surf;
+
+use anyhow::anyhow;
+use ash::vk;
+use rtrb::Consumer;
+
+use crate::{render::surf::Surface, sync::{OneshotRx, RenderInit, RenderMsg}};
+
+#[derive(Debug, Clone)]
+struct PdevCandidate {
+    pdev: vk::PhysicalDevice,
+    props: vk::PhysicalDeviceProperties,
+    score: u64,
+
+    graphics_idx: u32,
+    compute_idx: u32,
+    transfer_idx: u32,
+}
+
+impl PdevCandidate {
+    pub fn uniq_idxs(&self) -> Vec<u32> {
+        let mut seen = std::collections::HashSet::new();
+        [self.graphics_idx, self.compute_idx, self.transfer_idx]
+            .into_iter()
+            .filter(|idx| seen.insert(*idx))
+            .collect()
+    }
+
+    pub fn get_qus(&self, dev: &ash::Device) -> (vk::Queue, vk::Queue, vk::Queue) {
+        unsafe {(
+            dev.get_device_queue(self.graphics_idx, 0),
+            dev.get_device_queue(self.compute_idx, 0),
+            dev.get_device_queue(self.transfer_idx, 0),
+        )}
+    }
+}
+
+pub fn find_dedicated_qu(
+    qfams: &[vk::QueueFamilyProperties],
+    targ_flag: vk::QueueFlags,
+) -> Option<u32> {
+    let mut best_idx = None;
+    let mut min_extra_flags = u32::MAX;
+
+    for (idx, qfam) in qfams.iter().enumerate() {
+        let flags = qfam.queue_flags;
+
+        if flags.contains(targ_flag) {
+            // count number of extra flags
+            // SPARSE_BINDING doesn't count as extra flag
+            let extra_flags = flags & !targ_flag & !vk::QueueFlags::SPARSE_BINDING;
+            let extra_count = extra_flags.as_raw().count_ones();
+
+            // perfect queue
+            if extra_count == 0 {
+                return Some(idx as u32);
+            }
+
+            // find queue with minimum number of extra flags
+            if extra_count < min_extra_flags {
+                min_extra_flags = extra_count;
+                best_idx = Some(idx as u32);
+            }
+        }
+    }
+
+    best_idx
+}
+
+fn select_pdev(
+    inst: &ash::Instance,
+    surf: &Surface,
+) -> anyhow::Result<PdevCandidate> {
+    unsafe { inst.enumerate_physical_devices()? }
+        .into_iter()
+        .filter_map(|pdev| {
+            let qfams = unsafe {
+                inst.get_physical_device_queue_family_properties(pdev)
+            };
+
+            let graphics_idx = qfams
+                .iter()
+                .position(|qfam| qfam.queue_flags.contains(
+                    vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE,
+                ))?
+                as u32;
+            let present_idx = qfams
+                .iter()
+                .enumerate()
+                .position(|(idx, _)| surf.physical_device_support(pdev, idx as u32))?
+                as u32;
+
+            if graphics_idx != present_idx {
+                return None;
+            }
+
+            let compute_idx = find_dedicated_qu(&qfams, vk::QueueFlags::COMPUTE)?;
+            let transfer_idx = find_dedicated_qu(&qfams, vk::QueueFlags::TRANSFER)?;
+
+            let props = unsafe { inst.get_physical_device_properties(pdev) };
+            let mut score: u64 = match props.device_type {
+                vk::PhysicalDeviceType::DISCRETE_GPU => 100_000_000,
+                vk::PhysicalDeviceType::INTEGRATED_GPU => 10_000_000,
+                _ => 1_000_000,
+            };
+
+            let mem = unsafe { inst.get_physical_device_memory_properties(pdev) };
+            let vram_mb = mem.memory_heaps[..mem.memory_heap_count as usize]
+                .iter()
+                .filter(|heap| heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
+                .map(|heap| heap.size / (1024 * 1024))
+                .sum::<vk::DeviceSize>();
+            score += vram_mb;
+
+            // reward devices that gave us dedicated queues
+            if compute_idx != graphics_idx {
+                score += 50_000;
+            }
+            if transfer_idx != graphics_idx && transfer_idx != compute_idx {
+                score += 25_000;
+            }
+
+            Some(PdevCandidate {
+                pdev,
+                props,
+                score,
+                graphics_idx,
+                compute_idx,
+                transfer_idx
+            })
+        })
+        .max_by_key(|sel| sel.score)
+        .ok_or_else(|| anyhow!("no suitable device"))
+}
+
+fn create_dev(
+    inst: &ash::Instance,
+    sel: &PdevCandidate,
+) -> anyhow::Result<ash::Device> {
+    let qfam_idxs = sel.uniq_idxs();
+    let prios = [1.0f32];
+    let mut qu_cis = Vec::with_capacity(qfam_idxs.len());
+    for idx in qfam_idxs {
+        qu_cis.push(vk::DeviceQueueCreateInfo::default()
+            .queue_family_index(idx)
+            .queue_priorities(&prios));
+    }
+
+    let dev_exts = [ash::khr::swapchain::NAME.as_ptr()];
+
+    let mut vk12 = vk::PhysicalDeviceVulkan12Features::default()
+        .buffer_device_address(true)
+        .vulkan_memory_model(true);
+
+    let mut vk13 = vk::PhysicalDeviceVulkan13Features::default()
+        .synchronization2(true)
+        .dynamic_rendering(true);
+
+    let dev_ci = vk::DeviceCreateInfo::default()
+        .queue_create_infos(&qu_cis)
+        .enabled_extension_names(&dev_exts)
+        .push_next(&mut vk12)
+        .push_next(&mut vk13);
+
+    unsafe { Ok(inst.create_device(sel.pdev, &dev_ci, None)?) }
+}
+
+pub struct Renderer {
+    rx: Consumer<RenderMsg>,
+
+    inst: ash::Instance,
+    pdev: vk::PhysicalDevice,
+    dev: ash::Device,
+}
+
+impl Renderer {
+    fn new(init: RenderInit, rx: Consumer<RenderMsg>) -> anyhow::Result<Self> {
+        let entry = unsafe { ash::Entry::load()? };
+        let inst = unsafe { entry.create_instance(&Default::default(), None)? };
+
+        let surf = Surface::new(&entry, &inst, &init.win)?;
+        let sel = select_pdev(&inst, &surf)?;
+        let dev = create_dev(&inst, &sel)?;
+
+        Ok(Self {
+            rx,
+            inst,
+            pdev: sel.pdev,
+            dev,
+        })
+    }
+
+    fn destroy(self) {
+        unsafe {
+            self.dev.destroy_device(None);
+            self.inst.destroy_instance(None);
+        }
+    }
+
+    pub fn run(init_rx: OneshotRx<RenderInit>, rx: Consumer<RenderMsg>) {
+        let Some(init) = init_rx.recv() else { return };
+        let renderer = Self::new(init, rx).expect("failed to init renderer");
+
+        loop {
+            // TODO
+        }
+
+        renderer.destroy();
+    }
+}

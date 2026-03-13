@@ -1,0 +1,13 @@
+[package]
+name = "vx"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+ash = "0.38.0"
+ash-window = "0.13.0"
+bytemuck = "1.25.0"
+gpu-allocator = "0.28.0"
+rtrb = "0.3.3"
+winit = "0.30.13"
