@@ -1,32 +1,33 @@
 use std::sync::Arc;
+
 use ash::{khr, vk};
-use winit::window::Window;
-use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use winit::{raw_window_handle::{RawDisplayHandle, RawWindowHandle}, window::Window};
 
 pub struct Surface {
     pub handle: vk::SurfaceKHR,
     pub loader: khr::surface::Instance,
+    win: Arc<Window>, // keep the native handles alive until we are dropped
 }
 
 impl Surface {
     pub fn new(
         entry: &ash::Entry,
         inst: &ash::Instance,
-        window: &Arc<Window>,
+        raw_disp: &RawDisplayHandle,
+        raw_win: &RawWindowHandle,
+        win: Arc<Window>,
     ) -> anyhow::Result<Self> {
         let handle = unsafe {
-            ash_window::create_surface(
-                entry,
-                inst,
-                window.display_handle()?.as_raw(),
-                window.window_handle()?.as_raw(),
-                None,
-            )?
+            ash_window::create_surface(entry, inst, *raw_disp, *raw_win, None)?
         };
-
         let loader = khr::surface::Instance::new(entry, inst);
+        Ok(Self { handle, loader, win })
+    }
 
-        Ok(Self { handle, loader })
+    pub fn destroy(&self) {
+        unsafe {
+            self.loader.destroy_surface(self.handle, None);
+        }
     }
 
     pub fn physical_device_support(

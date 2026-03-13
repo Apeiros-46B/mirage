@@ -168,41 +168,57 @@ fn create_dev(
 pub struct Renderer {
     rx: Consumer<RenderMsg>,
 
-    inst: ash::Instance,
-    pdev: vk::PhysicalDevice,
     dev: ash::Device,
+    pdev: vk::PhysicalDevice,
+    surf: Surface,
+    inst: ash::Instance,
+    entry: ash::Entry,
 }
 
 impl Renderer {
     fn new(init: RenderInit, rx: Consumer<RenderMsg>) -> anyhow::Result<Self> {
         let entry = unsafe { ash::Entry::load()? };
-        let inst = unsafe { entry.create_instance(&Default::default(), None)? };
 
-        let surf = Surface::new(&entry, &inst, &init.win)?;
+        let req_exts = ash_window::enumerate_required_extensions(init.raw_disp)
+            .expect("failed to get Vulkan extensions");
+
+        let inst_ci = vk::InstanceCreateInfo::default()
+            .enabled_extension_names(req_exts);
+
+        let inst = unsafe { entry.create_instance(&inst_ci, None)? };
+
+        let surf = Surface::new(&entry, &inst, &init.raw_disp, &init.raw_win, init.win)?;
         let sel = select_pdev(&inst, &surf)?;
         let dev = create_dev(&inst, &sel)?;
 
         Ok(Self {
             rx,
-            inst,
-            pdev: sel.pdev,
             dev,
+            pdev: sel.pdev,
+            surf,
+            inst,
+            entry,
         })
     }
 
     fn destroy(self) {
         unsafe {
+            self.dev.device_wait_idle().unwrap();
             self.dev.destroy_device(None);
+            self.surf.destroy();
             self.inst.destroy_instance(None);
         }
     }
 
     pub fn run(init_rx: OneshotRx<RenderInit>, rx: Consumer<RenderMsg>) {
         let Some(init) = init_rx.recv() else { return };
-        let renderer = Self::new(init, rx).expect("failed to init renderer");
+        let mut renderer = Self::new(init, rx).expect("failed to init renderer");
 
         loop {
-            // TODO
+            let msg = renderer.rx.pop();
+            if let Ok(RenderMsg::Exiting) = msg {
+                break;
+            }
         }
 
         renderer.destroy();

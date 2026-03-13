@@ -5,6 +5,7 @@ use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
     event_loop::ActiveEventLoop,
+    raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::{Window, WindowAttributes, WindowId},
 };
 
@@ -43,7 +44,11 @@ impl ApplicationHandler for App {
         );
         self.win = Some(win.clone());
         if let Some(init_tx) = self.init_tx.take() {
-            init_tx.send(RenderInit { win });
+            init_tx.send(RenderInit {
+                raw_disp: win.display_handle().expect("failed to get display").as_raw(),
+                raw_win: win.window_handle().expect("failed to get window").as_raw(),
+                win,
+            });
         }
     }
 
@@ -57,6 +62,9 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(_) => {
                 self.tx.push(RenderMsg::Resized).ok();
             },
+            WindowEvent::CloseRequested => {
+                evt_loop.exit();
+            }
             _ => {},
         }
     }

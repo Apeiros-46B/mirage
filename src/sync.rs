@@ -1,11 +1,17 @@
 use std::sync::{Arc, Condvar, Mutex};
 
 use rtrb::Producer;
-use winit::window::Window;
+use winit::{raw_window_handle::{RawDisplayHandle, RawWindowHandle}, window::Window};
 
 pub struct RenderInit {
+    pub raw_disp: RawDisplayHandle,
+    pub raw_win: RawWindowHandle,
     pub win: Arc<Window>,
 }
+
+// safety: the handles are only passed for surface creation
+unsafe impl Send for RenderInit {}
+unsafe impl Sync for RenderInit {}
 
 pub enum RenderMsg {
     Resized,
