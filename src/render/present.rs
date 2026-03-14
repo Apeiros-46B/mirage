@@ -381,7 +381,10 @@ impl Presenter {
 
         let target = match self.swapchain.acquire(frame.img_available_sem)? {
             Some(t) => t,
-            None => return Ok(None),
+            None => {
+                self.resize_requested = true;
+                return Ok(None);
+            },
         };
 
         unsafe {
@@ -407,7 +410,7 @@ impl Presenter {
             .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT);
         let sig_info = vk::SemaphoreSubmitInfo::default()
             .semaphore(self.swapchain.render_sem())
-            .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT);
+            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS);
 
         let submit_info = vk::SubmitInfo2::default()
             .wait_semaphore_infos(std::slice::from_ref(&wait_info))
