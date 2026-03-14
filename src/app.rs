@@ -10,8 +10,7 @@ use winit::{
 };
 
 use crate::{
-    render::Renderer,
-    sync::{OneshotTx, RenderInit, RenderMsg, oneshot},
+    gpu::ctx::VulkanCtx, render::Renderer, sync::{OneshotTx, RenderInit, RenderMsg, oneshot}
 };
 
 pub struct App {
@@ -43,10 +42,17 @@ impl ApplicationHandler for App {
             .expect("failed to open window"),
         );
         self.win = Some(win.clone());
+
+        let ctx = VulkanCtx::new(
+                win.display_handle().expect("failed to get display").as_raw(),
+                win.window_handle().expect("failed to get window").as_raw(),
+                win.clone(),
+            )
+            .expect("failed to init vulkan");
+
         if let Some(init_tx) = self.init_tx.take() {
             init_tx.send(RenderInit {
-                raw_disp: win.display_handle().expect("failed to get display").as_raw(),
-                raw_win: win.window_handle().expect("failed to get window").as_raw(),
+                ctx: Arc::new(ctx),
                 win,
             });
         }

@@ -1,6 +1,6 @@
 mod present;
 
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use ash::vk;
 use rtrb::Consumer;
@@ -14,15 +14,12 @@ use crate::{
 pub struct Renderer {
     rx: Consumer<RenderMsg>,
     presenter: Presenter,
-    ctx: VulkanCtx,
-    // TODO: store this as an Arc since other threads also need it
-    // it should be created on main thread and passed to us via RenderInit
-    // then we also don't need to do the unsafe impl Send+Sync for raw handles
+    ctx: Arc<VulkanCtx>,
 }
 
 impl Renderer {
     fn new(init: RenderInit, rx: Consumer<RenderMsg>) -> anyhow::Result<Self> {
-        let ctx = VulkanCtx::new(init.raw_disp, init.raw_win, init.win.clone())?;
+        let ctx = init.ctx;
         let presenter = Presenter::new(&ctx, init.win)?;
         Ok(Self { rx, ctx, presenter })
     }
