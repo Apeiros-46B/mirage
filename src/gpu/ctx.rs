@@ -89,7 +89,7 @@ impl VulkanCtx {
 
 impl Drop for VulkanCtx {
     fn drop(&mut self) {
-        // entry is dropped by the compiler after all of this is done
+        // entry is dropped by the compiler after this is done
         unsafe {
             let _ = self.dev.device_wait_idle();
             self.dev.destroy_device(None);

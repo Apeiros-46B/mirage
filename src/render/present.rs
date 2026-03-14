@@ -309,12 +309,12 @@ impl Swapchain {
 
 // {{{ presenter
 pub struct Presenter {
-    win: Arc<Window>,
-    swapchain: Swapchain,
+    pub swapchain: Swapchain,
+    pub resize_requested: bool,
     cmd_pool: vk::CommandPool,
     frames: [FrameData; FRAMES_IN_FLIGHT],
     frame_idx: usize,
-    pub resize_requested: bool,
+    win: Arc<Window>,
 }
 
 impl Presenter {
