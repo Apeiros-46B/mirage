@@ -70,7 +70,9 @@ impl ApplicationHandler for App {
     }
 
     fn exiting(&mut self, evt_loop: &ActiveEventLoop) {
-        self.tx.push(RenderMsg::Exiting).ok();
+        while self.tx.push(RenderMsg::Exiting).is_err() {
+            std::thread::yield_now();
+        }
         self.render_thread.take().unwrap().join().ok();
     }
 }

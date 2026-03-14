@@ -3,7 +3,7 @@ use std::sync::Arc;
 use ash::{khr, prelude::*, vk};
 use winit::window::Window;
 
-use crate::{render::GPU, sync::RenderInit};
+use crate::{render::ctx::GPU, sync::RenderInit};
 
 pub struct Surface {
     pub handle: vk::SurfaceKHR,
@@ -34,7 +34,7 @@ impl Surface {
         })
     }
 
-    pub fn destroy(self) {
+    pub unsafe fn destroy(&mut self) {
         unsafe {
             self.loader.destroy_surface(self.handle, None);
         }

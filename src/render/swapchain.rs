@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ash::{khr, vk};
 
-use crate::render::{GPU, surf::Surface};
+use crate::render::{ctx::GPU, surf::Surface};
 
 pub struct Swapchain {
     pub handle: vk::SwapchainKHR,
