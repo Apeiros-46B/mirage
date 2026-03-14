@@ -25,7 +25,7 @@ impl App {
     pub fn new() -> Self {
         let (init_tx, init_rx) = oneshot();
         let (tx, rx) = RingBuffer::new(256);
-        let render_thread = thread::spawn(move || Renderer::run(init_rx, rx));
+        let render_thread = thread::spawn(move || Renderer::start(init_rx, rx));
         Self {
             win: None,
             render_thread: Some(render_thread),

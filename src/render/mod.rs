@@ -1,13 +1,18 @@
 mod surf;
+mod swapchain;
+
+use std::{ffi::c_char, sync::Arc};
 
 use anyhow::anyhow;
 use ash::vk;
 use rtrb::Consumer;
 
-use crate::{render::surf::Surface, sync::{OneshotRx, RenderInit, RenderMsg}};
+use crate::{render::{surf::Surface, swapchain::Swapchain}, sync::{OneshotRx, RenderInit, RenderMsg}};
+
+const DEV_EXTS: [*const c_char; 1] = [ash::khr::swapchain::NAME.as_ptr()];
 
 #[derive(Debug, Clone)]
-struct PdevCandidate {
+struct GPU {
     pdev: vk::PhysicalDevice,
     props: vk::PhysicalDeviceProperties,
     score: u64,
@@ -17,7 +22,7 @@ struct PdevCandidate {
     transfer_idx: u32,
 }
 
-impl PdevCandidate {
+impl GPU {
     pub fn uniq_idxs(&self) -> Vec<u32> {
         let mut seen = std::collections::HashSet::new();
         [self.graphics_idx, self.compute_idx, self.transfer_idx]
@@ -67,10 +72,10 @@ pub fn find_dedicated_qu(
     best_idx
 }
 
-fn select_pdev(
+fn select_gpu(
     inst: &ash::Instance,
     surf: &Surface,
-) -> anyhow::Result<PdevCandidate> {
+) -> anyhow::Result<GPU> {
     unsafe { inst.enumerate_physical_devices()? }
         .into_iter()
         .filter_map(|pdev| {
@@ -87,10 +92,12 @@ fn select_pdev(
             let present_idx = qfams
                 .iter()
                 .enumerate()
-                .position(|(idx, _)| surf.physical_device_support(pdev, idx as u32))?
+                .position(|(idx, _)| surf.pdev_support(pdev, idx as u32))?
                 as u32;
 
             if graphics_idx != present_idx {
+                // don't support the fringe case of graphics being a different queue
+                // from presentation
                 return None;
             }
 
@@ -120,7 +127,7 @@ fn select_pdev(
                 score += 25_000;
             }
 
-            Some(PdevCandidate {
+            Some(GPU {
                 pdev,
                 props,
                 score,
@@ -129,13 +136,13 @@ fn select_pdev(
                 transfer_idx
             })
         })
-        .max_by_key(|sel| sel.score)
+        .max_by_key(|gpu| gpu.score)
         .ok_or_else(|| anyhow!("no suitable device"))
 }
 
 fn create_dev(
     inst: &ash::Instance,
-    sel: &PdevCandidate,
+    sel: &GPU,
 ) -> anyhow::Result<ash::Device> {
     let qfam_idxs = sel.uniq_idxs();
     let prios = [1.0f32];
@@ -145,8 +152,6 @@ fn create_dev(
             .queue_family_index(idx)
             .queue_priorities(&prios));
     }
-
-    let dev_exts = [ash::khr::swapchain::NAME.as_ptr()];
 
     let mut vk12 = vk::PhysicalDeviceVulkan12Features::default()
         .buffer_device_address(true)
@@ -158,7 +163,7 @@ fn create_dev(
 
     let dev_ci = vk::DeviceCreateInfo::default()
         .queue_create_infos(&qu_cis)
-        .enabled_extension_names(&dev_exts)
+        .enabled_extension_names(&DEV_EXTS)
         .push_next(&mut vk12)
         .push_next(&mut vk13);
 
@@ -168,11 +173,14 @@ fn create_dev(
 pub struct Renderer {
     rx: Consumer<RenderMsg>,
 
-    dev: ash::Device,
-    pdev: vk::PhysicalDevice,
+    gpu: GPU,
     surf: Surface,
+    dev: ash::Device,
     inst: ash::Instance,
-    entry: ash::Entry,
+
+    // this is dropped in Drop, which happens after destroy().
+    // this is stored so invoking cleanup functions in destroy() is safe
+    _entry: ash::Entry,
 }
 
 impl Renderer {
@@ -187,17 +195,17 @@ impl Renderer {
 
         let inst = unsafe { entry.create_instance(&inst_ci, None)? };
 
-        let surf = Surface::new(&entry, &inst, &init.raw_disp, &init.raw_win, init.win)?;
-        let sel = select_pdev(&inst, &surf)?;
-        let dev = create_dev(&inst, &sel)?;
+        let surf = Surface::new(&entry, &inst, &init)?;
+        let gpu = select_gpu(&inst, &surf)?;
+        let dev = create_dev(&inst, &gpu)?;
 
         Ok(Self {
             rx,
             dev,
-            pdev: sel.pdev,
+            gpu,
             surf,
             inst,
-            entry,
+            _entry: entry,
         })
     }
 
@@ -210,17 +218,21 @@ impl Renderer {
         }
     }
 
-    pub fn run(init_rx: OneshotRx<RenderInit>, rx: Consumer<RenderMsg>) {
-        let Some(init) = init_rx.recv() else { return };
-        let mut renderer = Self::new(init, rx).expect("failed to init renderer");
-
+    fn run(mut self) {
         loop {
-            let msg = renderer.rx.pop();
+            let msg = self.rx.pop();
             if let Ok(RenderMsg::Exiting) = msg {
                 break;
             }
         }
+        self.destroy();
+    }
 
-        renderer.destroy();
+    pub fn start(init_rx: OneshotRx<RenderInit>, rx: Consumer<RenderMsg>) {
+        // this call blocks until we receive necessary data from main
+        // (window handles for surface creation, because on some platforms
+        // you cannot extract the raw window handle on a non-main thread)
+        let Some(init) = init_rx.recv() else { return };
+        Self::new(init, rx).expect("failed to init renderer").run();
     }
 }
