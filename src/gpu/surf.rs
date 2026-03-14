@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use ash::{khr, prelude::*, vk};
-use winit::window::Window;
+use winit::{raw_window_handle::{RawDisplayHandle, RawWindowHandle}, window::Window};
 
-use crate::{render::ctx::GPU, sync::RenderInit};
+use crate::gpu::GPU;
 
 pub struct Surface {
     pub handle: vk::SurfaceKHR,
@@ -15,14 +15,16 @@ impl Surface {
     pub fn new(
         entry: &ash::Entry,
         inst: &ash::Instance,
-        init: &RenderInit,
+        raw_disp: RawDisplayHandle,
+        raw_win: RawWindowHandle,
+        win: Arc<Window>,
     ) -> anyhow::Result<Self> {
         let handle = unsafe {
             ash_window::create_surface(
                 entry,
                 inst,
-                init.raw_disp,
-                init.raw_win,
+                raw_disp,
+                raw_win,
                 None,
             )?
         };
@@ -30,7 +32,7 @@ impl Surface {
         Ok(Self {
             handle,
             loader,
-            _win: init.win.clone(),
+            _win: win,
         })
     }
 

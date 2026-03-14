@@ -1,5 +1,6 @@
 mod app;
 mod game;
+mod gpu;
 mod render;
 mod error;
 mod sync;
