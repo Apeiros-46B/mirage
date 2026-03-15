@@ -1,6 +1,34 @@
+struct PushConstants {
+	float4x4 viewProj;
+	uint64_t world_bda;
+};
+
+[[vk::push_constant]]
+ConstantBuffer<PushConstants> push;
+
 [shader("vertex")]
-float4 vertMain() : SV_Position {
-	return float4(0.0, 0.0, 0.0, 1.0);
+float4 vertMain(uint vertexID : SV_VertexID) : SV_Position {
+	const float3 CORNERS[8] = {
+		float3(0, 0, 0), float3(1, 0, 0), float3(1, 1, 0), float3(0, 1, 0),
+		float3(0, 0, 1), float3(1, 0, 1), float3(1, 1, 1), float3(0, 1, 1)
+	};
+
+	// ccw winding
+	const uint INDICES[36] = {
+		0, 1, 2, 0, 2, 3, // front (-Z)
+		5, 4, 7, 5, 7, 6, // back (+Z)
+		3, 2, 6, 3, 6, 7, // top (+Y)
+		4, 5, 1, 4, 1, 0, // bottom (-Y)
+		1, 5, 6, 1, 6, 2, // right (+X)
+		4, 0, 3, 4, 3, 7  // left (-X)
+	};
+
+	float3 local_pos = CORNERS[INDICES[vertexID]];
+	local_pos *= 256.0; // chunk scale
+
+	// do real world position later
+	float3 world_pos = local_pos + float3(0.0, 0.0, 0.0);
+	return mul(push.viewProj, float4(world_pos, 1.0));
 }
 
 [shader("fragment")]

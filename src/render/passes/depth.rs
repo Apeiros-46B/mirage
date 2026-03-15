@@ -188,8 +188,7 @@ impl Task<FrameCtx> for DepthPrepass {
 
             // hardcoded single chunk, vsh calculates cube corners using gl_VertexIndex
             //
-            // later when chunks are dynamically loaded and compute-culled, this manual push constant
-            // and direct draw will be replaced by
+            // later when chunks are dynamically loaded and culled, direct draw is replaced by
             // - binding an indirect buffer (filled by the compute culler)
             // - binding a buffer of `ChunkAABB` data (containing coords, chunk ID, and maybe LOD)
             // - `ctx.dev.cmd_draw_indirect(cmd, indirect_buf, ...)`

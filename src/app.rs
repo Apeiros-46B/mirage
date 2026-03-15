@@ -4,13 +4,13 @@ use rtrb::{Producer, RingBuffer};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
-    event_loop::ActiveEventLoop,
+    event_loop::{ActiveEventLoop, ControlFlow},
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::{Window, WindowAttributes, WindowId},
 };
 
 use crate::{
-    gpu::ctx::VulkanCtx, render::Renderer, sync::{OneshotTx, RenderInit, RenderMsg, oneshot}
+    game::{EventHandler, GameState}, gpu::ctx::VulkanCtx, render::Renderer, sync::{OneshotTx, RenderInit, RenderMsg, oneshot}
 };
 
 pub struct App {
@@ -37,6 +37,8 @@ impl App {
 impl ApplicationHandler for App {
     // on desktop platforms, this is only called once
     fn resumed(&mut self, evt_loop: &ActiveEventLoop) {
+        evt_loop.set_control_flow(ControlFlow::Poll);
+
         let win = Arc::new(evt_loop
             .create_window(WindowAttributes::default())
             .expect("failed to open window"),
@@ -61,7 +63,7 @@ impl ApplicationHandler for App {
     fn window_event(
         &mut self,
         evt_loop: &ActiveEventLoop,
-        winid: WindowId,
+        _win_id: WindowId,
         evt: WindowEvent,
     ) {
         match evt {
@@ -75,7 +77,7 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn exiting(&mut self, evt_loop: &ActiveEventLoop) {
+    fn exiting(&mut self, _evt_loop: &ActiveEventLoop) {
         while self.tx.push(RenderMsg::Exiting).is_err() {
             std::thread::yield_now();
         }
