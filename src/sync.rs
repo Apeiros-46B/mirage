@@ -1,7 +1,7 @@
-use std::sync::{Arc, Condvar, Mutex};
+use std::{sync::{Arc, Condvar, Mutex, atomic::{AtomicBool, Ordering}}, thread::{self, JoinHandle}, time::Instant};
 
-use rtrb::Producer;
-use winit::window::Window;
+use rtrb::{Consumer, Producer, RingBuffer};
+use winit::{event::{ElementState, MouseButton}, keyboard::PhysicalKey, window::Window};
 
 use crate::gpu::ctx::VulkanCtx;
 
@@ -10,15 +10,26 @@ pub struct RenderInit {
     pub win: Arc<Window>,
 }
 
+pub struct GameInit {
+    pub win: Arc<Window>,
+}
+
+pub enum GameMsg {
+    Resized,
+    KeyPress(PhysicalKey, ElementState),
+    MouseClick(MouseButton, ElementState),
+    MouseMotion(f32, f32),
+}
+
 pub enum RenderMsg {
     Resized,
-    Exiting,
 }
 
 pub struct AppChannels {
     app_to_render: Producer<RenderMsg>,
 }
 
+// {{{ oneshot channels
 type Oneshot<T> = Arc<(Mutex<Option<T>>, Condvar)>;
 
 pub struct OneshotTx<T>(Oneshot<T>);
@@ -45,5 +56,100 @@ impl<T> OneshotRx<T> {
         let mut guard = mtx.lock().unwrap();
         guard = cvar.wait_while(guard, |v| v.is_none()).unwrap();
         guard.take()
+    }
+}
+// }}}
+
+pub trait Worker where Self: Sized {
+    const NAME: &'static str;
+
+    type Init: Send + 'static;
+    type Msg: Send + Sync + 'static;
+
+    fn new(init: Self::Init) -> anyhow::Result<Self>;
+
+    fn poll(&mut self, time: f64, dt: f32, tick_idx: usize) -> anyhow::Result<()>;
+
+    fn handle(&mut self, msg: Self::Msg);
+
+    fn run(mut self, mut rx: Consumer<Self::Msg>, should_exit: Arc<AtomicBool>) {
+        let start_time = Instant::now();
+        let mut prev_tick_time = start_time;
+        let mut tick_idx = 0;
+
+        loop {
+            if should_exit.load(Ordering::Relaxed) {
+                return;
+            }
+
+            while let Ok(msg) = rx.pop() {
+                self.handle(msg);
+            }
+
+            let now = Instant::now();
+            let time = (now - start_time).as_secs_f64();
+            let dt = (now - prev_tick_time).as_secs_f32();
+
+            if let Err(err) = self.poll(time, dt, tick_idx) {
+                eprintln!("error in {} at local tick #{}: {}", Self::NAME, tick_idx, err);
+            }
+
+            prev_tick_time = now;
+            tick_idx += 1;
+        }
+    }
+
+    fn spawn() -> WorkerHandle<Self> {
+        let should_exit = Arc::new(AtomicBool::new(false));
+        let should_exit_moved = should_exit.clone();
+
+        let (itx, irx) = oneshot();
+        let (tx, rx) = RingBuffer::new(256);
+        let thread = thread::spawn(move || {
+            // blocks until we receive initialization data
+            let Some(init) = irx.recv() else {
+                return
+            };
+            Self::new(init)
+                .expect(&format!("failed to init {}", Self::NAME))
+                .run(rx, should_exit_moved);
+        });
+
+        WorkerHandle {
+            thread: Some(thread),
+            should_exit,
+            itx: Some(itx),
+            tx,
+        }
+    }
+}
+
+pub struct WorkerHandle<W: Worker> {
+    thread: Option<JoinHandle<()>>,
+    pub should_exit: Arc<AtomicBool>,
+
+    itx: Option<OneshotTx<W::Init>>,
+    tx: Producer<W::Msg>,
+}
+
+impl<W: Worker> WorkerHandle<W> {
+    pub fn init(&mut self, init: W::Init) {
+        if let Some(itx) = self.itx.take() {
+            itx.send(init);
+        }
+    }
+
+    pub fn send(&mut self, msg: W::Msg) {
+        if let Err(err) = self.tx.push(msg) {
+            eprintln!("failed to send to {}: {}", W::NAME, err);
+        }
+    }
+
+    /// signals the worker to stop and blocks until the thread finishes its current tick
+    pub fn exit(&mut self) {
+        self.should_exit.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }

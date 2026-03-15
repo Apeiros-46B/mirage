@@ -146,7 +146,6 @@ impl Swapchain {
         self.extent = extent;
         self.img_idx = None;
 
-        println!("[{}x{}; {}]", extent.width, extent.height, self.imgs.len());
         Ok(true)
     }
 

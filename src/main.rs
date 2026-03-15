@@ -4,6 +4,7 @@ mod gpu;
 mod render;
 mod error;
 mod sync;
+mod util;
 
 use winit::event_loop::EventLoop;
 

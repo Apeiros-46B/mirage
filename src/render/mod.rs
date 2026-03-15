@@ -1,16 +1,12 @@
 mod passes;
 mod present;
 
-use std::{sync::Arc, time::Instant};
-
-use ash::vk::Extent2D;
-use rtrb::Consumer;
-use winit::window::Window;
+use std::sync::Arc;
 
 use crate::{
     gpu::{ctx::VulkanCtx, pass::Task},
     render::{passes::{ClearPass, FrameCtx, PresentPass, depth::DepthPrepass}, present::Presenter},
-    sync::{OneshotRx, RenderInit, RenderMsg},
+    sync::{RenderInit, RenderMsg, Worker},
 };
 
 pub struct Renderer {
@@ -18,20 +14,18 @@ pub struct Renderer {
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
     present_pass: PresentPass,
-
-    rx: Consumer<RenderMsg>,
     ctx: Arc<VulkanCtx>,
 }
 
-fn extent_of(win: &Window) -> Extent2D {
-    let inner = win.inner_size();
-    Extent2D { width: inner.width, height: inner.height }
-}
+impl Worker for Renderer {
+    const NAME: &'static str = "Renderer";
 
-impl Renderer {
-    fn new(init: RenderInit, rx: Consumer<RenderMsg>) -> anyhow::Result<Self> {
+    type Init = RenderInit;
+    type Msg = RenderMsg;
+
+    fn new(init: RenderInit) -> anyhow::Result<Self> {
         let ctx = init.ctx;
-        let extent = extent_of(&init.win);
+        let extent = crate::util::extent_of(&init.win);
         let presenter = Presenter::new(&ctx, init.win)?;
 
         let clear_pass = ClearPass;
@@ -39,7 +33,6 @@ impl Renderer {
         let present_pass = PresentPass;
 
         Ok(Self {
-            rx,
             ctx,
             presenter,
             clear_pass,
@@ -48,7 +41,7 @@ impl Renderer {
         })
     }
 
-    fn draw_frame(&mut self, frame_idx: usize, time: f64, dt: f32) -> anyhow::Result<()> {
+    fn poll(&mut self, time: f64, dt: f32, frame_idx: usize) -> anyhow::Result<()> {
         let Some((target, cmd, did_resize)) = self.presenter.begin_frame(&self.ctx)? else {
             return Ok(()); // minimized or out-of-date, skip drawing
         };
@@ -56,6 +49,7 @@ impl Renderer {
         if did_resize {
             self.clear_pass.resize(&self.ctx, target.extent)?;
             self.present_pass.resize(&self.ctx, target.extent)?;
+            self.depth_prepass.resize(&self.ctx, target.extent)?;
         }
 
         let frame = FrameCtx {
@@ -75,40 +69,10 @@ impl Renderer {
         self.presenter.submit_frame(&self.ctx)
     }
 
-    fn run(mut self) {
-        let start_time = Instant::now();
-        let mut prev_frame_time = start_time;
-        let mut frame_idx = 0usize;
-
-        loop {
-            while let Ok(msg) = self.rx.pop() {
-                match msg {
-                    RenderMsg::Exiting => return,
-                    RenderMsg::Resized => {
-                        self.presenter.resize_requested = true;
-                    }
-                }
-            }
-
-            let now = Instant::now();
-            let time = (now - start_time).as_secs_f64();
-            let dt = (now - prev_frame_time).as_secs_f32();
-
-            if let Err(e) = self.draw_frame(frame_idx, time, dt) {
-                eprintln!("render err: {e}");
-            }
-
-            prev_frame_time = now;
-            frame_idx += 1;
+    fn handle(&mut self, msg: RenderMsg) {
+        match msg {
+            RenderMsg::Resized => self.presenter.resize_requested = true,
         }
-    }
-
-    pub fn start(init_rx: OneshotRx<RenderInit>, rx: Consumer<RenderMsg>) {
-        // this call blocks until we receive necessary data from main
-        // (window handles for surface creation, because on some platforms
-        // you cannot extract the raw window handle on a non-main thread)
-        let Some(init) = init_rx.recv() else { return };
-        Self::new(init, rx).expect("failed to init renderer").run();
     }
 }
 

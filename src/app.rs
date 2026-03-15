@@ -1,6 +1,5 @@
-use std::{sync::Arc, thread::{self, JoinHandle}};
+use std::{sync::Arc};
 
-use rtrb::{Producer, RingBuffer};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -10,26 +9,21 @@ use winit::{
 };
 
 use crate::{
-    game::{EventHandler, GameState}, gpu::ctx::VulkanCtx, render::Renderer, sync::{OneshotTx, RenderInit, RenderMsg, oneshot}
+    gpu::ctx::VulkanCtx,
+    render::Renderer,
+    sync::{RenderInit, RenderMsg, Worker, WorkerHandle},
 };
 
 pub struct App {
     win: Option<Arc<Window>>,
-    render_thread: Option<JoinHandle<()>>,
-    init_tx: Option<OneshotTx<RenderInit>>,
-    tx: Producer<RenderMsg>,
+    renderer: WorkerHandle<Renderer>,
 }
 
 impl App {
     pub fn new() -> Self {
-        let (init_tx, init_rx) = oneshot();
-        let (tx, rx) = RingBuffer::new(256);
-        let render_thread = thread::spawn(move || Renderer::start(init_rx, rx));
         Self {
             win: None,
-            render_thread: Some(render_thread),
-            init_tx: Some(init_tx),
-            tx,
+            renderer: Renderer::spawn(),
         }
     }
 }
@@ -52,12 +46,10 @@ impl ApplicationHandler for App {
             )
             .expect("failed to init Vulkan");
 
-        if let Some(init_tx) = self.init_tx.take() {
-            init_tx.send(RenderInit {
-                ctx: Arc::new(ctx),
-                win,
-            });
-        }
+        self.renderer.init(RenderInit {
+            ctx: Arc::new(ctx),
+            win,
+        });
     }
 
     fn window_event(
@@ -68,19 +60,16 @@ impl ApplicationHandler for App {
     ) {
         match evt {
             WindowEvent::Resized(_) => {
-                self.tx.push(RenderMsg::Resized).ok();
+                self.renderer.send(RenderMsg::Resized);
             },
             WindowEvent::CloseRequested => {
                 evt_loop.exit();
             }
-            _ => {},
+            _ => {}
         }
     }
 
     fn exiting(&mut self, _evt_loop: &ActiveEventLoop) {
-        while self.tx.push(RenderMsg::Exiting).is_err() {
-            std::thread::yield_now();
-        }
-        self.render_thread.take().unwrap().join().ok();
+        self.renderer.exit();
     }
 }
