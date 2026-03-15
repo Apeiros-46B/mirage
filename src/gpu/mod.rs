@@ -1,10 +1,12 @@
+pub mod ctx;
+pub mod img;
+pub mod pass;
+pub mod surf;
+
 use anyhow::anyhow;
 use ash::vk;
 
 use crate::gpu::surf::Surface;
-
-pub mod ctx;
-pub mod surf;
 
 #[derive(Debug, Clone)]
 pub struct GPU {

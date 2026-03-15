@@ -48,7 +48,7 @@ impl ApplicationHandler for App {
                 win.window_handle().expect("failed to get window").as_raw(),
                 win.clone(),
             )
-            .expect("failed to init vulkan");
+            .expect("failed to init Vulkan");
 
         if let Some(init_tx) = self.init_tx.take() {
             init_tx.send(RenderInit {

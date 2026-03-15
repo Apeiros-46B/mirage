@@ -8,7 +8,7 @@ use crate::gpu::ctx::VulkanCtx;
 const FRAMES_IN_FLIGHT: usize = 2;
 const SWAPCHAIN_MIN_IMGS: u32 = 3;
 const IMG_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
-    aspect_mask:vk::ImageAspectFlags::COLOR,
+    aspect_mask: vk::ImageAspectFlags::COLOR,
     base_mip_level: 0,
     level_count: 1,
     base_array_layer: 0,
@@ -200,7 +200,7 @@ impl Swapchain {
     }
 
     // barrier template for the current swapchain image
-    pub fn base_barrier(&self) -> vk::ImageMemoryBarrier2<'_> {
+    pub fn base_barrier(&self) -> vk::ImageMemoryBarrier2<'static> {
         let idx = self.img_idx.expect("base_barrier called outside acquire/present");
         vk::ImageMemoryBarrier2::default()
             .image(self.imgs[idx as usize].img)
@@ -311,9 +311,9 @@ impl Swapchain {
 pub struct Presenter {
     pub swapchain: Swapchain,
     pub resize_requested: bool,
-    cmd_pool: vk::CommandPool,
-    frames: [FrameData; FRAMES_IN_FLIGHT],
     frame_idx: usize,
+    frames: [FrameData; FRAMES_IN_FLIGHT],
+    cmd_pool: vk::CommandPool,
     win: Arc<Window>,
 }
 
@@ -362,8 +362,9 @@ impl Presenter {
     }
 
     pub fn begin_frame(&mut self, ctx: &VulkanCtx)
-        -> anyhow::Result<Option<(RenderTarget, vk::CommandBuffer)>>
+        -> anyhow::Result<Option<(RenderTarget, vk::CommandBuffer, bool)>>
     {
+        let mut did_resize = false;
         let frame = &self.frames[self.frame_idx];
 
         unsafe {
@@ -377,6 +378,7 @@ impl Presenter {
         if self.resize_requested {
             self.swapchain.recreate(ctx, self.win.inner_size().into())?;
             self.resize_requested = false;
+            did_resize = true;
         }
 
         let target = match self.swapchain.acquire(frame.img_available_sem)? {
@@ -396,7 +398,7 @@ impl Presenter {
             ctx.dev.begin_command_buffer(frame.cmd, &cmd_i)?;
         }
 
-        Ok(Some((target, frame.cmd)))
+        Ok(Some((target, frame.cmd, did_resize)))
     }
 
     pub fn submit_frame(&mut self, ctx: &VulkanCtx) -> anyhow::Result<()> {

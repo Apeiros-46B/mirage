@@ -1,6 +1,7 @@
-use std::{ffi::c_char, sync::Arc};
+use std::{ffi::c_char, mem::ManuallyDrop, sync::{Arc, Mutex}};
 
 use ash::vk;
+use gpu_allocator::{AllocationSizes, AllocatorDebugSettings, vulkan::{Allocator, AllocatorCreateDesc}};
 use winit::{raw_window_handle::{RawDisplayHandle, RawWindowHandle}, window::Window};
 
 use crate::gpu::{GPU, surf::Surface};
@@ -40,6 +41,7 @@ fn create_dev(
 pub struct VulkanCtx {
     pub gpu: GPU,
     pub surf: Surface,
+    pub alloc: ManuallyDrop<Mutex<Allocator>>,
 
     pub graphics_qu: vk::Queue,
     pub compute_qu: vk::Queue,
@@ -63,7 +65,11 @@ impl VulkanCtx {
         let req_exts = ash_window::enumerate_required_extensions(raw_disp)
             .expect("failed to get Vulkan extensions");
 
+        let app_info = vk::ApplicationInfo::default()
+            .api_version(vk::API_VERSION_1_3);
+
         let inst_ci = vk::InstanceCreateInfo::default()
+            .application_info(&app_info)
             .enabled_extension_names(req_exts);
 
         let inst = unsafe { entry.create_instance(&inst_ci, None)? };
@@ -71,6 +77,15 @@ impl VulkanCtx {
         let surf = Surface::new(&entry, &inst, raw_disp, raw_win, win)?;
         let gpu = GPU::select(&inst, &surf)?;
         let dev = create_dev(&inst, &gpu)?;
+
+        let alloc = Allocator::new(&AllocatorCreateDesc {
+            instance: inst.clone(),
+            device: dev.clone(),
+            physical_device: gpu.pdev,
+            debug_settings: AllocatorDebugSettings::default(),
+            buffer_device_address: true,
+            allocation_sizes: AllocationSizes::default(),
+        })?;
 
         let (graphics_qu, compute_qu, transfer_qu) = gpu.get_qus(&dev);
 
@@ -82,6 +97,7 @@ impl VulkanCtx {
             transfer_qu,
             dev,
             inst,
+            alloc: ManuallyDrop::new(Mutex::new(alloc)),
             entry,
         })
     }
@@ -92,6 +108,7 @@ impl Drop for VulkanCtx {
         // entry is dropped by the compiler after this is done
         unsafe {
             let _ = self.dev.device_wait_idle();
+            ManuallyDrop::drop(&mut self.alloc);
             self.dev.destroy_device(None);
             self.surf.destroy();
             self.inst.destroy_instance(None);

@@ -1,90 +1,75 @@
+mod passes;
 mod present;
 
 use std::{sync::Arc, time::Instant};
 
-use ash::vk;
+use ash::vk::Extent2D;
 use rtrb::Consumer;
+use winit::window::Window;
 
 use crate::{
-    gpu::ctx::VulkanCtx,
-    render::present::Presenter,
+    gpu::{ctx::VulkanCtx, pass::Task},
+    render::{passes::{ClearPass, FrameCtx, PresentPass, depth::DepthPrepass}, present::Presenter},
     sync::{OneshotRx, RenderInit, RenderMsg},
 };
 
 pub struct Renderer {
-    rx: Consumer<RenderMsg>,
     presenter: Presenter,
+    clear_pass: ClearPass,
+    depth_prepass: DepthPrepass,
+    present_pass: PresentPass,
+
+    rx: Consumer<RenderMsg>,
     ctx: Arc<VulkanCtx>,
+}
+
+fn extent_of(win: &Window) -> Extent2D {
+    let inner = win.inner_size();
+    Extent2D { width: inner.width, height: inner.height }
 }
 
 impl Renderer {
     fn new(init: RenderInit, rx: Consumer<RenderMsg>) -> anyhow::Result<Self> {
         let ctx = init.ctx;
+        let extent = extent_of(&init.win);
         let presenter = Presenter::new(&ctx, init.win)?;
-        Ok(Self { rx, ctx, presenter })
+
+        let clear_pass = ClearPass;
+        let depth_prepass = DepthPrepass::new(&ctx, extent)?;
+        let present_pass = PresentPass;
+
+        Ok(Self {
+            rx,
+            ctx,
+            presenter,
+            clear_pass,
+            depth_prepass,
+            present_pass,
+        })
     }
 
-    fn draw_frame(&mut self, start_time: &Instant) -> anyhow::Result<()> {
-        let Some((target, cmd)) = self.presenter.begin_frame(&self.ctx)? else {
+    fn draw_frame(&mut self, frame_idx: usize, time: f64, dt: f32) -> anyhow::Result<()> {
+        let Some((target, cmd, did_resize)) = self.presenter.begin_frame(&self.ctx)? else {
             return Ok(()); // minimized or out-of-date, skip drawing
         };
 
+        if did_resize {
+            self.clear_pass.resize(&self.ctx, target.extent)?;
+            self.present_pass.resize(&self.ctx, target.extent)?;
+        }
+
+        let frame = FrameCtx {
+            frame_idx,
+            time,
+            dt,
+            target,
+            swapchain_base_barrier: self.presenter.swapchain.base_barrier(),
+        };
+
         unsafe {
-            let elapsed = start_time.elapsed().as_secs_f32();
-            let sine = (elapsed * std::f32::consts::PI).sin();
-            let color_val = sine * 0.5 + 0.5;
-
-            // the guy from frankenstein
-            let clear_val = vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [color_val, color_val, color_val, 1.0],
-                },
-            };
-
-            let to_color_barrier = self.presenter.swapchain.base_barrier()
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .src_access_mask(vk::AccessFlags2::empty())
-                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE);
-
-            let dep_info_color = vk::DependencyInfo::default()
-                .image_memory_barriers(std::slice::from_ref(&to_color_barrier));
-            self.ctx.dev.cmd_pipeline_barrier2(cmd, &dep_info_color);
-
-            let color_atmt = vk::RenderingAttachmentInfo::default()
-                .image_view(target.view)
-                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(vk::AttachmentLoadOp::CLEAR)
-                .store_op(vk::AttachmentStoreOp::STORE)
-                .clear_value(clear_val);
-
-            let rendering_info = vk::RenderingInfo::default()
-                .render_area(vk::Rect2D {
-                    offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: target.extent,
-                })
-                .layer_count(1)
-                .color_attachments(std::slice::from_ref(&color_atmt));
-
-            self.ctx.dev.cmd_begin_rendering(cmd, &rendering_info);
-
-            // TODO
-
-            self.ctx.dev.cmd_end_rendering(cmd);
-
-            let to_present_barrier = self.presenter.swapchain.base_barrier()
-                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
-                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                .dst_access_mask(vk::AccessFlags2::empty());
-
-            let dep_info_present = vk::DependencyInfo::default()
-                .image_memory_barriers(std::slice::from_ref(&to_present_barrier));
-            self.ctx.dev.cmd_pipeline_barrier2(cmd, &dep_info_present);
+            self.clear_pass.execute(&self.ctx, &frame, cmd)?;
+            self.depth_prepass.execute(&self.ctx, &frame, cmd)?;
+            self.present_pass.execute(&self.ctx, &frame, cmd)?;
         }
 
         self.presenter.submit_frame(&self.ctx)
@@ -92,6 +77,8 @@ impl Renderer {
 
     fn run(mut self) {
         let start_time = Instant::now();
+        let mut prev_frame_time = start_time;
+        let mut frame_idx = 0usize;
 
         loop {
             while let Ok(msg) = self.rx.pop() {
@@ -103,9 +90,16 @@ impl Renderer {
                 }
             }
 
-            if let Err(e) = self.draw_frame(&start_time) {
+            let now = Instant::now();
+            let time = (now - start_time).as_secs_f64();
+            let dt = (now - prev_frame_time).as_secs_f32();
+
+            if let Err(e) = self.draw_frame(frame_idx, time, dt) {
                 eprintln!("render err: {e}");
             }
+
+            prev_frame_time = now;
+            frame_idx += 1;
         }
     }
 
