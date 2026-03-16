@@ -1,46 +1,19 @@
 use std::{sync::{Arc, Condvar, Mutex, atomic::{AtomicBool, Ordering}}, thread::{self, JoinHandle}, time::Instant};
 
 use rtrb::{Consumer, Producer, RingBuffer};
-use winit::{event::{ElementState, MouseButton}, keyboard::PhysicalKey, window::Window};
-
-use crate::gpu::ctx::VulkanCtx;
-
-pub struct RenderInit {
-    pub ctx: Arc<VulkanCtx>,
-    pub win: Arc<Window>,
-}
-
-pub struct GameInit {
-    pub win: Arc<Window>,
-}
-
-pub enum GameMsg {
-    Resized,
-    KeyPress(PhysicalKey, ElementState),
-    MouseClick(MouseButton, ElementState),
-    MouseMotion(f32, f32),
-}
-
-pub enum RenderMsg {
-    Resized,
-}
-
-pub struct AppChannels {
-    app_to_render: Producer<RenderMsg>,
-}
 
 // {{{ oneshot channels
 type Oneshot<T> = Arc<(Mutex<Option<T>>, Condvar)>;
 
-pub struct OneshotTx<T>(Oneshot<T>);
-pub struct OneshotRx<T>(Oneshot<T>);
+pub struct OneshotProducer<T>(Oneshot<T>);
+pub struct OneshotConsumer<T>(Oneshot<T>);
 
-pub fn oneshot<T>() -> (OneshotTx<T>, OneshotRx<T>) {
+pub fn oneshot<T>() -> (OneshotProducer<T>, OneshotConsumer<T>) {
     let inner = Arc::new((Mutex::new(None), Condvar::new()));
-    (OneshotTx(inner.clone()), OneshotRx(inner))
+    (OneshotProducer(inner.clone()), OneshotConsumer(inner))
 }
 
-impl<T> OneshotTx<T> {
+impl<T> OneshotProducer<T> {
     pub fn send(self, item: T) {
         let (mtx, cvar) = &*self.0;
         let mut guard = mtx.lock().unwrap();
@@ -50,7 +23,7 @@ impl<T> OneshotTx<T> {
     }
 }
 
-impl<T> OneshotRx<T> {
+impl<T> OneshotConsumer<T> {
     pub fn recv(self) -> Option<T> {
         let (mtx, cvar) = &*self.0;
         let mut guard = mtx.lock().unwrap();
@@ -60,6 +33,7 @@ impl<T> OneshotRx<T> {
 }
 // }}}
 
+// {{{ utility for managing persistent worker threads
 pub trait Worker where Self: Sized {
     const NAME: &'static str;
 
@@ -128,7 +102,7 @@ pub struct WorkerHandle<W: Worker> {
     thread: Option<JoinHandle<()>>,
     pub should_exit: Arc<AtomicBool>,
 
-    itx: Option<OneshotTx<W::Init>>,
+    itx: Option<OneshotProducer<W::Init>>,
     tx: Producer<W::Msg>,
 }
 
@@ -153,3 +127,4 @@ impl<W: Worker> WorkerHandle<W> {
         }
     }
 }
+// }}}

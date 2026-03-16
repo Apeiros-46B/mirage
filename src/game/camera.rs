@@ -1,7 +1,7 @@
 use glam::{Mat4, Vec2, Vec3};
-use winit::{dpi::PhysicalSize, event::WindowEvent};
+use winit::dpi::PhysicalSize;
 
-use crate::game::{EventHandler, Polled, input::{InputBtn, InputState}};
+use crate::game::{Polled, input::{InputBtn, InputState}};
 
 #[derive(Clone, Debug)]
 pub struct Camera {
@@ -76,7 +76,7 @@ impl Camera {
         self.recalc_proj();
     }
 
-    fn resize(&mut self, new_sz: PhysicalSize<u32>) {
+    pub fn resize(&mut self, new_sz: PhysicalSize<u32>) {
         self.scr_sz = Vec2::new(new_sz.width as f32, new_sz.height as f32);
         self.recalc_proj();
     }
@@ -155,14 +155,6 @@ impl Polled for Camera {
 
         if moving {
             self.recalc_view();
-        }
-    }
-}
-
-impl EventHandler for Camera {
-    fn handle_win_evt(&mut self, evt: &WindowEvent) {
-        if let WindowEvent::Resized(new_sz) = evt {
-            self.resize(*new_sz);
         }
     }
 }

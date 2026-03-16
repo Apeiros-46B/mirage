@@ -3,11 +3,22 @@ mod present;
 
 use std::sync::Arc;
 
+use winit::window::Window;
+
 use crate::{
     gpu::{ctx::VulkanCtx, pass::Task},
     render::{passes::{ClearPass, FrameCtx, PresentPass, depth::DepthPrepass}, present::Presenter},
-    sync::{RenderInit, RenderMsg, Worker},
+    sync::Worker,
 };
+
+pub struct RenderInit {
+    pub ctx: Arc<VulkanCtx>,
+    pub win: Arc<Window>,
+}
+
+pub enum RenderMsg {
+    Resized,
+}
 
 pub struct Renderer {
     presenter: Presenter,

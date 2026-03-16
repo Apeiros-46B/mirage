@@ -1,7 +1,5 @@
-use winit::event::{DeviceEvent, ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton};
 use winit::keyboard::{KeyCode, PhysicalKey};
-
-use crate::game::{EventHandler, Polled};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
@@ -21,8 +19,8 @@ pub enum InputBtn {
     Unrecognized,
 }
 
-impl InputBtn {
-    pub fn from_key(key: PhysicalKey) -> Self {
+impl From<PhysicalKey> for InputBtn {
+    fn from(key: PhysicalKey) -> Self {
         let PhysicalKey::Code(code) = key else {
             return Self::Unrecognized;
         };
@@ -40,8 +38,10 @@ impl InputBtn {
             _ => Self::Unrecognized,
         }
     }
+}
 
-    pub fn from_mouse_button(btn: MouseButton) -> Self {
+impl From<MouseButton> for InputBtn {
+    fn from(btn: MouseButton) -> Self {
         match btn {
             MouseButton::Left => Self::BreakBlock,
             MouseButton::Right => Self::PlaceBlock,
@@ -102,58 +102,32 @@ impl InputState {
         self.mouse_delta = (0.0, 0.0);
         delta
     }
-}
 
-impl Polled for InputState {
-    fn poll_post(&mut self) {
+    pub fn reset_keys(&mut self) {
         self.just_pressed.clear();
         self.just_released.clear();
     }
-}
 
-impl EventHandler for InputState {
-    fn handle_win_evt(&mut self, evt: &WindowEvent) {
-        match evt {
-            WindowEvent::KeyboardInput { event: kev, .. } => {
-                let btn = InputBtn::from_key(kev.physical_key);
+    pub fn handle_input<T>(&mut self, key: T, state: ElementState) where InputBtn: From<T> {
+        let input = InputBtn::from(key);
 
-                if kev.state == ElementState::Pressed {
-                    if kev.repeat {
-                        return;
-                    }
-                    self.pressed.insert(btn);
-                    self.just_pressed.insert(btn);
-                    self.just_released.remove(btn);
-                } else {
-                    self.pressed.remove(btn);
-                    self.just_pressed.remove(btn);
-                    self.just_released.insert(btn);
-                }
-            }
-            WindowEvent::MouseInput { state, button, .. } => {
-                let btn = InputBtn::from_mouse_button(*button);
+        dbg!(&input);
 
-                if *state == ElementState::Pressed {
-                    self.pressed.insert(btn);
-                    self.just_pressed.insert(btn);
-                    self.just_released.remove(btn);
-                } else {
-                    self.pressed.remove(btn);
-                    self.just_pressed.remove(btn);
-                    self.just_released.insert(btn);
-                }
-            }
-            _ => {}
+        if state == ElementState::Pressed {
+            self.pressed.insert(input);
+            self.just_pressed.insert(input);
+            self.just_released.remove(input);
+        } else {
+            self.pressed.remove(input);
+            self.just_pressed.remove(input);
+            self.just_released.insert(input);
         }
     }
 
-    fn handle_dev_evt(&mut self, evt: &DeviceEvent) {
-        match evt {
-            DeviceEvent::MouseMotion { delta: (x, y) } => {
-                self.mouse_delta.0 += *x as f32;
-                self.mouse_delta.1 += *y as f32;
-            }
-            _ => {}
-        }
+    pub fn handle_mouse(&mut self, dx: f32, dy: f32) {
+        dbg!(dx, dy);
+
+        self.mouse_delta.0 += dx;
+        self.mouse_delta.1 += dy;
     }
 }
