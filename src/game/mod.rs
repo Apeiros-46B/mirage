@@ -7,7 +7,7 @@ use winit::{event::{ElementState, MouseButton}, keyboard::PhysicalKey, window::W
 use crate::{
     game::{camera::Camera, input::InputState},
     sync::{
-        chan::{DeadlineConsumer, DeadlineProducer, bounded_deadline},
+        chan::{ConsumerDeadline, ProducerDeadline, bounded_deadline},
         worker::Worker,
     },
 };
@@ -39,8 +39,9 @@ impl Worker for Game {
 
     type Init = GameInit;
     type Msg = GameMsg;
-    type Tx = DeadlineProducer<Self::Msg>;
-    type Rx = DeadlineConsumer<Self::Msg>;
+    type Tx = ProducerDeadline<Self::Msg>;
+    type Rx = ConsumerDeadline<Self::Msg>;
+    type AuxRx = ();
 
     fn channel() -> (Self::Tx, Self::Rx) {
         bounded_deadline(8192)
@@ -65,8 +66,13 @@ impl Worker for Game {
         Ok(())
     }
 
-    fn run(self, rx: Self::Rx, should_exit: Arc<AtomicBool>) {
-        self.run_tickrate(rx, should_exit, 120.0);
+    fn run(
+        self,
+        rx: Self::Rx,
+        aux_rx: Self::AuxRx,
+        should_exit: Arc<AtomicBool>,
+    ) {
+        self.run_tickrate(rx, aux_rx, should_exit, 120.0);
     }
 
     fn handle(&mut self, msg: Self::Msg) {

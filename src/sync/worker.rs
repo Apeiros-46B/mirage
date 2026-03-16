@@ -4,7 +4,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::sync::chan::{DeadlineRx, OneshotProducer, Rx, Tx, oneshot};
+use crate::sync::chan::{
+    AuxRxBundle,
+    ProducerOneshot,
+    Rx,
+    RxDeadline,
+    Tx,
+    oneshot,
+};
 
 pub trait Worker: Sized {
     const NAME: &'static str;
@@ -13,6 +20,7 @@ pub trait Worker: Sized {
     type Msg: Send + Sync + 'static;
     type Tx: Tx<Self::Msg>;
     type Rx: Rx<Self::Msg>;
+    type AuxRx: AuxRxBundle<Self>;
 
     fn channel() -> (Self::Tx, Self::Rx);
 
@@ -23,11 +31,13 @@ pub trait Worker: Sized {
     fn handle(&mut self, msg: Self::Msg);
 
     // poll as fast as possible with no timing guarantees
-    fn run_free(mut self, mut rx: Self::Rx, should_exit: Arc<AtomicBool>) {
-        let mut prev = Instant::now();
-        let mut tick = 0usize;
-
-        self.main_loop(should_exit, &mut prev, &mut tick,
+    fn run_free(
+        mut self,
+        mut rx: Self::Rx,
+        aux_rx: Self::AuxRx,
+        should_exit: Arc<AtomicBool>,
+    ) {
+        self.main_loop(should_exit, aux_rx,
             |this| rx.drain(|msg| this.handle(msg)),
             |_| {},
         );
@@ -37,25 +47,23 @@ pub trait Worker: Sized {
     fn run_tickrate(
         mut self,
         mut rx: Self::Rx,
+        aux_rx: Self::AuxRx,
         should_exit: Arc<AtomicBool>,
         tickrate_hz: f64,
-    ) where Self::Rx: DeadlineRx<Self::Msg> {
+    ) where Self::Rx: RxDeadline<Self::Msg> {
         let tick_dur = Duration::from_secs_f64(1.0 / tickrate_hz);
 
         let mut next = Instant::now() + tick_dur;
-        let mut prev = Instant::now();
-        let mut tick = 0usize;
-
         let deadline = next;
 
         // register this thread so the producer can unpark it
         rx.use_current_thread();
 
-        self.main_loop(should_exit, &mut prev, &mut tick,
+        self.main_loop(should_exit, aux_rx,
             |this| rx.drain_deadline(deadline, |msg| this.handle(msg)),
             |_| {
                 // advance the deadline by integer multiples of tick time.
-                // if the tick processing lags, missing later ticks, skip them
+                // if tick() processing lags and misses ticks, skip them
                 let now = Instant::now();
                 while next <= now {
                     next += tick_dur;
@@ -67,12 +75,13 @@ pub trait Worker: Sized {
     fn main_loop(
         &mut self,
         should_exit: Arc<AtomicBool>,
-        prev: &mut Instant,
-        tick: &mut usize,
+        mut aux_rx: Self::AuxRx,
         mut pre_tick: impl FnMut(&mut Self),
         mut post_tick: impl FnMut(&mut Self),
     ) {
         let start = Instant::now();
+        let mut prev = start;
+        let mut tick = 0usize;
 
         loop {
             if should_exit.load(Ordering::Relaxed) {
@@ -81,35 +90,43 @@ pub trait Worker: Sized {
 
             pre_tick(self);
 
+            // not sure if this should be before or after pre_tick
+            aux_rx.drain_all(self);
+
             let now = Instant::now();
-            if let Err(e) = self.tick(now - start, now - *prev, *tick) {
+            if let Err(e) = self.tick(now - start, now - prev, tick) {
                 eprintln!("[{}] tick {} error: {e}", Self::NAME, tick);
             }
-            *prev = now;
-            *tick += 1;
+            prev = now;
+            tick += 1;
 
             post_tick(self);
         }
     }
 
-    fn run(self, rx: Self::Rx, should_exit: Arc<AtomicBool>) {
-        self.run_free(rx, should_exit);
+    fn run(
+        self,
+        rx: Self::Rx,
+        aux_rx: Self::AuxRx,
+        should_exit: Arc<AtomicBool>,
+    ) {
+        self.run_free(rx, aux_rx, should_exit);
     }
 
     fn spawn() -> WorkerHandle<Self> {
         let should_exit = Arc::new(AtomicBool::new(false));
         let should_exit_moved = should_exit.clone();
 
-        let (itx, irx) = oneshot();
+        let (itx, irx) = oneshot::<(Self::Init, Self::AuxRx)>();
         let (tx, rx) = Self::channel();
         let thread = thread::spawn(move || {
             // blocks until we receive initialization data
-            let Some(init) = irx.recv() else {
+            let Some((init, aux_rx)) = irx.recv() else {
                 return
             };
             Self::new(init)
                 .expect(&format!("failed to init {}", Self::NAME))
-                .run(rx, should_exit_moved);
+                .run(rx, aux_rx, should_exit_moved);
         });
 
         WorkerHandle {
@@ -125,14 +142,22 @@ pub struct WorkerHandle<W: Worker> {
     thread: Option<JoinHandle<()>>,
     pub should_exit: Arc<AtomicBool>,
 
-    itx: Option<OneshotProducer<W::Init>>,
+    itx: Option<ProducerOneshot<(W::Init, W::AuxRx)>>,
     tx: W::Tx,
 }
 
 impl<W: Worker> WorkerHandle<W> {
-    pub fn init(&mut self, init: W::Init) {
+    pub fn init(&mut self, init: W::Init)
+    where W::AuxRx: Default
+    {
         if let Some(itx) = self.itx.take() {
-            itx.send(init);
+            itx.send((init, W::AuxRx::default()));
+        }
+    }
+
+    pub fn init_with(&mut self, init: W::Init, aux_rx: W::AuxRx) {
+        if let Some(itx) = self.itx.take() {
+            itx.send((init, aux_rx));
         }
     }
 

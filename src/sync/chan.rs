@@ -1,6 +1,8 @@
 use std::{sync::{Arc, Condvar, Mutex, OnceLock, atomic::{AtomicBool, Ordering}}, thread, time::Instant};
 
-use rtrb::{Consumer, PopError, Producer, PushError, RingBuffer};
+use rtrb::RingBuffer;
+
+pub use rtrb::{Consumer, PopError, Producer, PushError};
 
 pub trait Tx<T>: Send + 'static {
     fn push(&mut self, msg: T) -> Result<(), PushError<T>>;
@@ -16,7 +18,7 @@ pub trait Rx<T>: Send + 'static {
     }
 }
 
-pub trait DeadlineRx<T>: Rx<T> {
+pub trait RxDeadline<T>: Rx<T> {
     // called before usage on the thread that will be parked
     fn use_current_thread(&self) {}
 
@@ -38,7 +40,7 @@ pub trait DeadlineRx<T>: Rx<T> {
             }
 
             // the queue is now empty but the deadline has not yet been reached
-            // the `while let` will call recv_deadline again, blocking until timeout
+            // the `while let` will call pop_deadline again, blocking until timeout
         }
     }
 }
@@ -64,31 +66,31 @@ pub fn bounded<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
 // }}}
 
 // {{{ deadline blocking wrapper for rtrb queues
-pub struct DeadlineProducer<T> {
+pub struct ProducerDeadline<T> {
     tx: Producer<T>,
     sleeping: Arc<AtomicBool>,
     consumer: Arc<OnceLock<thread::Thread>>,
 }
 
-pub struct DeadlineConsumer<T> {
+pub struct ConsumerDeadline<T> {
     rx: Consumer<T>,
     sleeping: Arc<AtomicBool>,
     thread_slot: Arc<OnceLock<thread::Thread>>,
 }
 
 pub fn bounded_deadline<T>(capacity: usize)
-    -> (DeadlineProducer<T>, DeadlineConsumer<T>)
+    -> (ProducerDeadline<T>, ConsumerDeadline<T>)
 {
     let (tx, rx) = RingBuffer::new(capacity);
     let sleeping = Arc::new(AtomicBool::new(false));
     let slot = Arc::new(OnceLock::new());
     (
-        DeadlineProducer { tx, sleeping: sleeping.clone(), consumer: slot.clone() },
-        DeadlineConsumer { rx, sleeping, thread_slot: slot },
+        ProducerDeadline { tx, sleeping: sleeping.clone(), consumer: slot.clone() },
+        ConsumerDeadline { rx, sleeping, thread_slot: slot },
     )
 }
 
-impl<T: Send + 'static> Tx<T> for DeadlineProducer<T> {
+impl<T: Send + 'static> Tx<T> for ProducerDeadline<T> {
     fn push(&mut self, msg: T) -> Result<(), PushError<T>> {
         self.tx.push(msg)?;
         if self.sleeping.load(Ordering::Acquire) {
@@ -100,13 +102,13 @@ impl<T: Send + 'static> Tx<T> for DeadlineProducer<T> {
     }
 }
 
-impl<T: Send + 'static> Rx<T> for DeadlineConsumer<T> {
+impl<T: Send + 'static> Rx<T> for ConsumerDeadline<T> {
     fn pop(&mut self) -> Result<T, PopError> {
         self.rx.pop()
     }
 }
 
-impl<T: Send + 'static> DeadlineRx<T> for DeadlineConsumer<T> {
+impl<T: Send + 'static> RxDeadline<T> for ConsumerDeadline<T> {
     fn use_current_thread(&self) {
         self.thread_slot.get_or_init(thread::current);
     }
@@ -142,15 +144,15 @@ impl<T: Send + 'static> DeadlineRx<T> for DeadlineConsumer<T> {
 // {{{ oneshot channels
 type Oneshot<T> = Arc<(Mutex<Option<T>>, Condvar)>;
 
-pub struct OneshotProducer<T>(Oneshot<T>);
-pub struct OneshotConsumer<T>(Oneshot<T>);
+pub struct ProducerOneshot<T>(Oneshot<T>);
+pub struct ConsumerOneshot<T>(Oneshot<T>);
 
-pub fn oneshot<T>() -> (OneshotProducer<T>, OneshotConsumer<T>) {
+pub fn oneshot<T>() -> (ProducerOneshot<T>, ConsumerOneshot<T>) {
     let inner = Arc::new((Mutex::new(None), Condvar::new()));
-    (OneshotProducer(inner.clone()), OneshotConsumer(inner))
+    (ProducerOneshot(inner.clone()), ConsumerOneshot(inner))
 }
 
-impl<T> OneshotProducer<T> {
+impl<T> ProducerOneshot<T> {
     pub fn send(self, item: T) {
         let (mtx, cvar) = &*self.0;
         let mut guard = mtx.lock().unwrap();
@@ -160,7 +162,7 @@ impl<T> OneshotProducer<T> {
     }
 }
 
-impl<T> OneshotConsumer<T> {
+impl<T> ConsumerOneshot<T> {
     pub fn recv(self) -> Option<T> {
         let (mtx, cvar) = &*self.0;
         let mut guard = mtx.lock().unwrap();
@@ -168,4 +170,58 @@ impl<T> OneshotConsumer<T> {
         guard.take()
     }
 }
+// }}}
+
+// {{{ bundle of non-blocking queues for auxiliary worker communication
+/// A receiver paired with a handler function.
+pub struct AuxRxSlot<T, W> {
+    // this only accepts non-blocking queues because auxiliary communication
+    // between workers should not be blocking or have tick deadlines anyway
+    rx: Consumer<T>,
+    handler: fn(&mut W, T),
+}
+
+impl<T, W> AuxRxSlot<T, W> {
+    pub fn new(rx: Consumer<T>, handler: fn(&mut W, T)) -> Self {
+        Self { rx, handler }
+    }
+
+    fn drain(&mut self, worker: &mut W) {
+        while let Ok(msg) = self.rx.pop() {
+            (self.handler)(worker, msg);
+        }
+    }
+}
+
+/// A bundle of heterogeneous receivers that can be drained into a worker.
+pub trait AuxRxBundle<W>: Send + 'static {
+    fn drain_all(&mut self, worker: &mut W);
+}
+
+// workers with only a primary queue have an empty bundle
+impl<W> AuxRxBundle<W> for () {
+    fn drain_all(&mut self, _: &mut W) {}
+}
+
+impl<W: 'static, T: Send + 'static> AuxRxBundle<W> for AuxRxSlot<T, W> {
+    fn drain_all(&mut self, worker: &mut W) {
+        self.drain(worker);
+    }
+}
+
+// each element must itself also be RxBundle<W> for arbitrary nesting
+macro_rules! impl_bundle {
+    ($($idx:tt : $T:ident),+) => {
+        impl<W, $($T: AuxRxBundle<W>),+> AuxRxBundle<W> for ($($T,)+) {
+            fn drain_all(&mut self, worker: &mut W) {
+                $(self.$idx.drain_all(worker);)+
+            }
+        }
+    }
+}
+
+impl_bundle!(0: A);
+impl_bundle!(0: A, 1: B);
+impl_bundle!(0: A, 1: B, 2: C);
+impl_bundle!(0: A, 1: B, 2: C, 3: D);
 // }}}

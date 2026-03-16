@@ -39,6 +39,7 @@ impl Worker for Renderer {
     type Msg = RenderMsg;
     type Tx = Producer<Self::Msg>;
     type Rx = Consumer<Self::Msg>;
+    type AuxRx = ();
 
     fn channel() -> (Self::Tx, Self::Rx) {
         bounded(8192)
