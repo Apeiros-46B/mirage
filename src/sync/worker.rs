@@ -1,7 +1,8 @@
 use std::{
+    cell::Cell,
     sync::{Arc, atomic::{AtomicBool, Ordering}},
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::{Duration, Instant}
 };
 
 use crate::sync::chan::{
@@ -52,21 +53,19 @@ pub trait Worker: Sized {
         tickrate_hz: f64,
     ) where Self::Rx: RxDeadline<Self::Msg> {
         let tick_dur = Duration::from_secs_f64(1.0 / tickrate_hz);
-
-        let mut next = Instant::now() + tick_dur;
-        let deadline = next;
+        let next = Cell::new(Instant::now() + tick_dur);
 
         // register this thread so the producer can unpark it
         rx.use_current_thread();
 
         self.main_loop(should_exit, aux_rx,
-            |this| rx.drain_deadline(deadline, |msg| this.handle(msg)),
+            |this| rx.drain_deadline(next.get(), |msg| this.handle(msg)),
             |_| {
                 // advance the deadline by integer multiples of tick time.
                 // if tick() processing lags and misses ticks, skip them
                 let now = Instant::now();
-                while next <= now {
-                    next += tick_dur;
+                while next.get() <= now {
+                    next.update(|val| val + tick_dur);
                 }
             },
         );
