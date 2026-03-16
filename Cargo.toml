@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
+arc-swap = "1.8.2"
 ash = "0.38.0"
 ash-window = "0.13.0"
 bytemuck = "1.25.0"

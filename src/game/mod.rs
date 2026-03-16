@@ -1,10 +1,16 @@
 pub mod camera;
 pub mod input;
 
-use std::sync::Arc;
+use std::{sync::{Arc, atomic::AtomicBool}, time::Duration};
 use winit::{event::{ElementState, MouseButton}, keyboard::PhysicalKey, window::Window};
 
-use crate::{game::{camera::Camera, input::InputState}, sync::Worker};
+use crate::{
+    game::{camera::Camera, input::InputState},
+    sync::{
+        chan::{DeadlineConsumer, DeadlineProducer, bounded_deadline},
+        worker::Worker,
+    },
+};
 
 pub trait Polled {
     fn poll(&mut self, _input: &mut InputState, _dt: f32) {}
@@ -33,6 +39,12 @@ impl Worker for Game {
 
     type Init = GameInit;
     type Msg = GameMsg;
+    type Tx = DeadlineProducer<Self::Msg>;
+    type Rx = DeadlineConsumer<Self::Msg>;
+
+    fn channel() -> (Self::Tx, Self::Rx) {
+        bounded_deadline(8192)
+    }
 
     fn new(init: Self::Init) -> anyhow::Result<Self> {
         Ok(Self {
@@ -42,18 +54,30 @@ impl Worker for Game {
         })
     }
 
-    fn poll(&mut self, _time: f64, dt: f32, _tick_idx: usize) -> anyhow::Result<()> {
-        // TODO: currently this is just a busy wait. should probably have some kind of timing/tick loop
-        self.camera.poll(&mut self.input, dt);
+    fn tick(
+        &mut self,
+        _elapsed: Duration,
+        dt: Duration,
+        _tick: usize,
+    ) -> anyhow::Result<()> {
+        self.camera.poll(&mut self.input, dt.as_secs_f32());
         self.input.reset_keys();
         Ok(())
+    }
+
+    fn run(self, rx: Self::Rx, should_exit: Arc<AtomicBool>) {
+        self.run_tickrate(rx, should_exit, 120.0);
     }
 
     fn handle(&mut self, msg: Self::Msg) {
         match msg {
             GameMsg::KeyPress(key, state) => self.input.handle_input(key, state),
             GameMsg::MouseClick(btn, state) => self.input.handle_input(btn, state),
-            GameMsg::MouseMotion(dx, dy) => self.input.handle_mouse(dx, dy),
+            GameMsg::MouseMotion(dx, dy) => {
+                self.input.handle_mouse(dx, dy);
+                self.camera.poll(&mut self.input, 0.0);
+                // ^ 0.0 dt to apply mouse movements only
+            },
             GameMsg::Resized => self.camera.resize(self.win.inner_size()),
         }
     }

@@ -1,14 +1,18 @@
 mod passes;
 mod present;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
+use rtrb::{Consumer, Producer};
 use winit::window::Window;
 
 use crate::{
     gpu::{ctx::VulkanCtx, pass::Task},
-    render::{passes::{ClearPass, FrameCtx, PresentPass, depth::DepthPrepass}, present::Presenter},
-    sync::Worker,
+    render::{
+        passes::{ClearPass, FrameCtx, PresentPass, depth::DepthPrepass},
+        present::Presenter,
+    },
+    sync::{chan::bounded, worker::Worker},
 };
 
 pub struct RenderInit {
@@ -33,6 +37,12 @@ impl Worker for Renderer {
 
     type Init = RenderInit;
     type Msg = RenderMsg;
+    type Tx = Producer<Self::Msg>;
+    type Rx = Consumer<Self::Msg>;
+
+    fn channel() -> (Self::Tx, Self::Rx) {
+        bounded(8192)
+    }
 
     fn new(init: RenderInit) -> anyhow::Result<Self> {
         let ctx = init.ctx;
@@ -52,21 +62,26 @@ impl Worker for Renderer {
         })
     }
 
-    fn poll(&mut self, time: f64, dt: f32, frame_idx: usize) -> anyhow::Result<()> {
-        let Some((target, cmd, did_resize)) = self.presenter.begin_frame(&self.ctx)? else {
+    fn tick(
+        &mut self,
+        elapsed: Duration,
+        dt: Duration,
+        tick: usize,
+    ) -> anyhow::Result<()> {
+        let Some((target, cmd, resize)) = self.presenter.begin_frame(&self.ctx)? else {
             return Ok(()); // minimized or out-of-date, skip drawing
         };
 
-        if did_resize {
+        if resize {
             self.clear_pass.resize(&self.ctx, target.extent)?;
             self.present_pass.resize(&self.ctx, target.extent)?;
             self.depth_prepass.resize(&self.ctx, target.extent)?;
         }
 
         let frame = FrameCtx {
-            frame_idx,
-            time,
-            dt,
+            frame_idx: tick,
+            time: elapsed.as_secs_f64(),
+            dt: dt.as_secs_f32(),
             target,
             swapchain_base_barrier: self.presenter.swapchain.base_barrier(),
         };

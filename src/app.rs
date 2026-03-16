@@ -12,7 +12,7 @@ use crate::{
     game::{Game, GameInit, GameMsg},
     gpu::ctx::VulkanCtx,
     render::{RenderInit, RenderMsg, Renderer},
-    sync::{Worker, WorkerHandle},
+    sync::worker::{Worker, WorkerHandle},
 };
 
 pub struct App {
@@ -34,8 +34,7 @@ impl App {
 impl ApplicationHandler for App {
     // on desktop platforms, this is only called once
     fn resumed(&mut self, evt_loop: &ActiveEventLoop) {
-        // TODO: do we even need this if our game logic is on a separate thread?
-        evt_loop.set_control_flow(ControlFlow::Poll);
+        evt_loop.set_control_flow(ControlFlow::Wait);
 
         let win = Arc::new(evt_loop
             .create_window(WindowAttributes::default())
