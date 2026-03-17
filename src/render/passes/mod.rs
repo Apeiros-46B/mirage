@@ -15,8 +15,6 @@ pub struct FrameCtx {
 pub struct ClearPass;
 
 impl Task<FrameCtx> for ClearPass {
-    const NAME: &'static str = "ClearPass";
-
     unsafe fn execute(
         &mut self,
         ctx: &VulkanCtx,
@@ -66,8 +64,6 @@ impl Task<FrameCtx> for ClearPass {
 pub struct PresentPass;
 
 impl Task<FrameCtx> for PresentPass {
-    const NAME: &'static str = "PresentPass";
-
     unsafe fn execute(
         &mut self,
         ctx: &VulkanCtx,

@@ -12,19 +12,27 @@ use crate::{
     game::{Game, GameInit, GameMsg},
     gpu::ctx::VulkanCtx,
     render::{RenderInit, RenderMsg, Renderer},
-    sync::worker::{WorkerExt, WorkerHandle},
+    sync::{chan::SafeSend, worker::{WorkerExt, WorkerHandle}},
 };
 
 pub struct App {
     win: Option<Arc<Window>>,
+
+    // egui_ctx: egui::Context,
+    // egui_state: Option<egui_winit::State>,
+
     game: WorkerHandle<Game>,
     renderer: WorkerHandle<Renderer>,
 }
 
 impl App {
     pub fn new() -> Self {
+        // let egui_ctx = egui::Context::default();
+
         Self {
             win: None,
+            // egui_ctx,
+            // egui_state: None,
             game: Game::spawn(),
             renderer: Renderer::spawn(),
         }
@@ -41,6 +49,14 @@ impl ApplicationHandler for App {
             .expect("failed to open window"),
         );
         self.win = Some(win.clone());
+        // self.egui_state = Some(egui_winit::State::new(
+        //     self.egui_ctx.clone(),
+        //     egui::ViewportId::ROOT,
+        //     &win,
+        //     Some(win.scale_factor() as f32),
+        //     None,
+        //     None,
+        // ));
 
         let ctx = VulkanCtx::new(
                 win.display_handle().expect("failed to get display").as_raw(),
@@ -63,22 +79,35 @@ impl ApplicationHandler for App {
         _win_id: WindowId,
         evt: WindowEvent,
     ) {
+        let Some(win) = self.win.as_ref() else {
+            return;
+        };
+
+        let mut consumed = false;
+        // if let Some(egui_state) = &mut self.egui_state {
+        //     let res = egui_state.on_window_event(win, &evt);
+        //     consumed = res.consumed;
+        // }
+
         match evt {
             WindowEvent::CloseRequested => {
                 evt_loop.exit();
             }
             WindowEvent::Resized(_) => {
-                self.game.send(GameMsg::Resized);
-                self.renderer.send(RenderMsg::Resized);
+                self.game.tx.send(GameMsg::Resized);
+                self.renderer.tx.send(RenderMsg::Resized);
             },
             WindowEvent::MouseInput { state, button, .. } => {
-                self.game.send(GameMsg::MouseClick(button, state));
-            }
-            WindowEvent::KeyboardInput { event: k_evt, .. } => {
-                if k_evt.repeat {
+                if consumed {
                     return;
                 }
-                self.game.send(GameMsg::KeyPress(k_evt.physical_key, k_evt.state));
+                self.game.tx.send(GameMsg::MouseClick(button, state));
+            }
+            WindowEvent::KeyboardInput { event: k_evt, .. } => {
+                if consumed || k_evt.repeat {
+                    return;
+                }
+                self.game.tx.send(GameMsg::KeyPress(k_evt.physical_key, k_evt.state));
             }
             _ => {}
         }
@@ -93,7 +122,7 @@ impl ApplicationHandler for App {
         match evt {
             DeviceEvent::MouseMotion { delta } => {
                 let (dx, dy) = delta;
-                self.game.send(GameMsg::MouseMotion(dx as f32, dy as f32));
+                self.game.tx.send(GameMsg::MouseMotion(dx as f32, dy as f32));
             }
             _ => {}
         }

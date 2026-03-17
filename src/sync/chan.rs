@@ -1,5 +1,4 @@
 use std::{
-    marker::PhantomData,
     sync::{Arc, Condvar, Mutex, OnceLock, atomic::{AtomicBool, Ordering}},
     thread,
     time::Instant,
@@ -177,66 +176,52 @@ impl<T> ConsumerOneshot<T> {
 }
 // }}}
 
-// {{{ bundle of Rx<T> for auxiliary worker communication
-pub trait HandleAux<M> {
-    fn handle_aux(&mut self, msg: M);
+// {{{ send safely to a channel and log errors in debug mode
+pub trait SafeSend<T> {
+    fn send(&mut self, msg: T);
 }
 
-pub struct AuxRxSlot<T, R> {
-    rx: R,
-    // use `fn() -> M` so it doesn't affect Send/Sync
-    _marker: PhantomData<fn() -> T>,
+// need to duplicate once to prevent "downstream traits may implement" (E0119)
+pub trait SafeSendOpt<T> {
+    fn send(&mut self, msg: T);
 }
 
-impl<T, R: Rx<T>> AuxRxSlot<T, R> {
-    pub fn new(rx: R) -> Self {
-        Self {
-            rx,
-            _marker: PhantomData,
+impl<T, Q: Tx<T>> SafeSend<T> for Q {
+    #[cfg(debug_assertions)]
+    fn send(&mut self, msg: T) {
+        if let Err(err) = self.push(msg) {
+            eprintln!(
+                "failed to send {}: {}",
+                std::any::type_name::<T>(),
+                err,
+            );
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn send(&mut self, msg: T) {
+        let _ = tx.push(msg);
+    }
+}
+
+impl<T, Q: SafeSend<T>> SafeSendOpt<T> for Option<Q> {
+    #[cfg(debug_assertions)]
+    fn send(&mut self, msg: T) {
+        if let Some(tx) = self {
+            tx.send(msg);
+        } else {
+            eprintln!(
+                "tried to send {} to taken queue",
+                std::any::type_name::<T>(),
+            );
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn send(&mut self, msg: T) {
+        if let Some(tx) = self {
+            tx.send(msg);
         }
     }
 }
-
-impl<T, R: Rx<T>> From<R> for AuxRxSlot<T, R> {
-    fn from(rx: R) -> Self {
-        Self::new(rx)
-    }
-}
-
-pub trait AuxRxBundle<W>: Send + 'static {
-    fn drain_all(&mut self, worker: &mut W);
-}
-
-impl<W> AuxRxBundle<W> for () {
-    fn drain_all(&mut self, _: &mut W) {}
-}
-
-impl<T, R, W> AuxRxBundle<W> for AuxRxSlot<T, R>
-where
-    T: Send + 'static,
-    R: Rx<T>,
-    W: HandleAux<T>,
-{
-    fn drain_all(&mut self, worker: &mut W) {
-        while let Ok(msg) = self.rx.pop() {
-            worker.handle_aux(msg);
-        }
-    }
-}
-
-// each element must itself also be RxBundle<W> for arbitrary nesting
-macro_rules! impl_bundle {
-    ($($idx:tt : $T:ident),+) => {
-        impl<W, $($T: AuxRxBundle<W>),+> AuxRxBundle<W> for ($($T,)+) {
-            fn drain_all(&mut self, worker: &mut W) {
-                $(self.$idx.drain_all(worker);)+
-            }
-        }
-    }
-}
-
-impl_bundle!(0: A);
-impl_bundle!(0: A, 1: B);
-impl_bundle!(0: A, 1: B, 2: C);
-impl_bundle!(0: A, 1: B, 2: C, 3: D);
 // }}}

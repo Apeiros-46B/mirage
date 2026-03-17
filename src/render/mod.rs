@@ -12,8 +12,12 @@ use crate::{
         passes::{ClearPass, FrameCtx, PresentPass, depth::DepthPrepass},
         present::Presenter,
     },
-    sync::{chan::bounded, worker::Worker},
+    sync::{chan::bounded, worker::{Worker, inbound_aux_channels}},
 };
+
+// inbound_aux_channels!(Renderer, {
+//     ui: [UiMsg; 1024] => handle_ui_msg,
+// });
 
 pub struct RenderInit {
     pub ctx: Arc<VulkanCtx>,
@@ -33,12 +37,12 @@ pub struct Renderer {
 }
 
 impl Worker for Renderer {
-    const NAME: &'static str = "Renderer";
-
     type Init = RenderInit;
     type Msg = RenderMsg;
     type Tx = Producer<Self::Msg>;
     type Rx = Consumer<Self::Msg>;
+
+    type AuxTx = ();
     type AuxRx = ();
 
     fn channel() -> (Self::Tx, Self::Rx) {

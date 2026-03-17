@@ -1,4 +1,5 @@
 // utility
+mod debug;
 mod gpu;
 mod sync;
 mod world;

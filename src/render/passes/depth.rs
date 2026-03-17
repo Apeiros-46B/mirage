@@ -129,8 +129,6 @@ impl DepthPrepass {
 }
 
 impl Task<FrameCtx> for DepthPrepass {
-    const NAME: &'static str = "DepthPrepass";
-
     fn resize(&mut self, ctx: &VulkanCtx, extent: vk::Extent2D) -> anyhow::Result<()> {
         unsafe {
             self.depth_target.destroy(ctx);

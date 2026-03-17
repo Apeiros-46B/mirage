@@ -1,27 +1,118 @@
 use std::{
-    cell::Cell,
-    sync::{Arc, atomic::{AtomicBool, Ordering}},
-    thread::{self, JoinHandle},
-    time::{Duration, Instant}
+    any::type_name, cell::Cell, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread::{self, JoinHandle}, time::{Duration, Instant}
 };
 
 use crate::sync::chan::{
-    AuxRxBundle,
-    ProducerOneshot,
-    Rx,
-    RxDeadline,
-    Tx,
-    oneshot,
+    ProducerOneshot, Rx, RxDeadline, Tx, oneshot
 };
 
-pub trait Worker: Sized {
-    const NAME: &'static str;
+// {{{ declarative auxiliary channel setup for workers
+pub trait AuxTx<W>: Sized + Send + 'static {
+    type Rx: AuxRx<W>;
+    /// construct all channel pairs
+    fn new() -> (Self, Self::Rx);
+}
 
+pub trait AuxRx<W>: Send + 'static {
+    /// drains all channels without blocking, routing messages to worker methods
+    fn drain_all(&mut self, worker: &mut W);
+}
+
+// workers with no auxiliary channels
+impl<W> AuxTx<W> for () {
+    type Rx = ();
+    fn new() -> ((), ()) { ((), ()) }
+}
+
+impl<W> AuxRx<W> for () {
+    fn drain_all(&mut self, _worker: &mut W) {}
+}
+
+#[macro_export]
+macro_rules! inbound_aux_channels {
+    (
+        $worker:ident, {
+            $(
+                $source:ident => {
+                    $( $field:ident : [ $msg:ty ; $size:expr ] => $handler:ident ),* $(,)?
+                }
+            ),* $(,)?
+        }
+    ) => {
+        paste::paste! {
+            pub struct [<$worker AuxTx>] {
+                $(
+                    $(pub $field: Option<rtrb::Producer<$msg>>,)*
+                )*
+            }
+
+            pub struct [<$worker AuxRx>] {
+                $(
+                    $(pub $field: rtrb::Consumer<$msg>,)*
+                )*
+            }
+
+            $(
+                pub struct [<$source To $worker>] {
+                    $(pub $field: rtrb::Producer<$msg>,)*
+                }
+            )*
+
+            impl [<$worker AuxTx>] {
+                $(
+                    pub fn [<take_ $source:snake>](&mut self) -> Option<[<$source To $worker>]> {
+                        Some([<$source To $worker>] {
+                            $(
+                                $field: self.$field.take()?,
+                            )*
+                        })
+                    }
+                )*
+            }
+
+            impl $crate::sync::worker::AuxTx<$worker> for [<$worker AuxTx>] {
+                type Rx = [<$worker AuxRx>];
+
+                fn new() -> (Self, Self::Rx) {
+                    $(
+                        $(
+                            let ([<$field _tx>], [<$field _rx>]) = rtrb::RingBuffer::new($size);
+                        )*
+                    )*
+                    (
+                        Self { $($($field: Some([<$field _tx>]),)*)* },
+                        Self::Rx { $($($field: [<$field _rx>],)*)* },
+                    )
+                }
+            }
+
+            impl $crate::sync::worker::AuxRx<$worker> for [<$worker AuxRx>] {
+                fn drain_all(&mut self, worker: &mut $worker) {
+                    $(
+                        $(
+                            while let Ok(msg) = self.$field.pop() {
+                                worker.$handler(msg);
+                            }
+                        )*
+                    )*
+                }
+            }
+        }
+    };
+}
+
+pub(crate) use inbound_aux_channels;
+// }}}
+
+pub trait Worker: Sized {
     type Init: Send + 'static;
     type Msg: Send + Sync + 'static;
+
     type Tx: Tx<Self::Msg>;
     type Rx: Rx<Self::Msg>;
-    type AuxRx: AuxRxBundle<Self>;
+
+    type AuxTx: AuxTx<Self, Rx = Self::AuxRx>;
+    type AuxRx: AuxRx<Self>;
 
     fn channel() -> (Self::Tx, Self::Rx);
 
@@ -48,6 +139,8 @@ mod seal {
 }
 
 pub trait WorkerExt: Worker + seal::Sealed {
+    fn aux_channels() -> (Self::AuxTx, Self::AuxRx);
+
     /// poll as quickly as possible
     fn run_free(
         self,
@@ -77,6 +170,10 @@ pub trait WorkerExt: Worker + seal::Sealed {
 }
 
 impl<T: Worker> WorkerExt for T {
+    fn aux_channels() -> (Self::AuxTx, Self::AuxRx)  {
+        <Self::AuxTx as AuxTx<Self>>::new()
+    }
+
     fn run_free(
         mut self,
         mut rx: Self::Rx,
@@ -138,7 +235,7 @@ impl<T: Worker> WorkerExt for T {
 
             let now = Instant::now();
             if let Err(e) = self.tick(now - start, now - prev, tick) {
-                eprintln!("[{}] tick {} error: {e}", Self::NAME, tick);
+                eprintln!("[{}] tick {} error: {e}", type_name::<Self>(), tick);
             }
             prev = now;
             tick += 1;
@@ -151,15 +248,17 @@ impl<T: Worker> WorkerExt for T {
         let should_exit = Arc::new(AtomicBool::new(false));
         let should_exit_moved = should_exit.clone();
 
-        let (itx, irx) = oneshot::<(Self::Init, Self::AuxRx)>();
+        let (itx, irx) = oneshot();
         let (tx, rx) = Self::channel();
+        let (aux_tx, aux_rx) = Self::aux_channels();
+
         let thread = thread::spawn(move || {
             // blocks until we receive initialization data
-            let Some((init, aux_rx)) = irx.recv() else {
+            let Some(init) = irx.recv() else {
                 return
             };
             Self::new(init)
-                .expect(&format!("failed to init {}", Self::NAME))
+                .expect(&format!("failed to init {}", type_name::<Self>()))
                 .run(rx, aux_rx, should_exit_moved);
         });
 
@@ -168,6 +267,7 @@ impl<T: Worker> WorkerExt for T {
             should_exit,
             itx: Some(itx),
             tx,
+            aux_tx,
         }
     }
 }
@@ -178,28 +278,15 @@ pub struct WorkerHandle<W: Worker> {
     thread: Option<JoinHandle<()>>,
     pub should_exit: Arc<AtomicBool>,
 
-    itx: Option<ProducerOneshot<(W::Init, W::AuxRx)>>,
-    tx: W::Tx,
+    itx: Option<ProducerOneshot<W::Init>>,
+    pub tx: W::Tx,
+    pub aux_tx: W::AuxTx,
 }
 
 impl<W: Worker> WorkerHandle<W> {
-    pub fn init(&mut self, init: W::Init)
-    where W::AuxRx: Default
-    {
+    pub fn init(&mut self, init: W::Init) {
         if let Some(itx) = self.itx.take() {
-            itx.send((init, W::AuxRx::default()));
-        }
-    }
-
-    pub fn init_with(&mut self, init: W::Init, aux_rx: W::AuxRx) {
-        if let Some(itx) = self.itx.take() {
-            itx.send((init, aux_rx));
-        }
-    }
-
-    pub fn send(&mut self, msg: W::Msg) {
-        if let Err(err) = self.tx.push(msg) {
-            eprintln!("failed to send to {}: {}", W::NAME, err);
+            itx.send(init);
         }
     }
 

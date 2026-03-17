@@ -35,12 +35,12 @@ pub struct Game {
 }
 
 impl Worker for Game {
-    const NAME: &'static str = "Game";
-
     type Init = GameInit;
     type Msg = GameMsg;
     type Tx = ProducerDeadline<Self::Msg>;
     type Rx = ConsumerDeadline<Self::Msg>;
+
+    type AuxTx = ();
     type AuxRx = ();
 
     fn channel() -> (Self::Tx, Self::Rx) {

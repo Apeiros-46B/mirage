@@ -3,8 +3,6 @@ use ash::vk;
 use crate::gpu::ctx::VulkanCtx;
 
 pub trait Task<T> {
-    const NAME: &'static str;
-
     fn resize(&mut self, _ctx: &VulkanCtx, _extent: vk::Extent2D) -> anyhow::Result<()> {
         Ok(())
     }
