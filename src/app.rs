@@ -1,4 +1,4 @@
-use std::{sync::Arc};
+use std::{sync::Arc, time::Duration};
 
 use winit::{
     application::ApplicationHandler,
@@ -9,11 +9,17 @@ use winit::{
 };
 
 use crate::{
-    game::{Game, GameInit, GameMsg},
-    gpu::ctx::VulkanCtx,
-    render::{RenderInit, RenderMsg, Renderer},
-    sync::{chan::SafeSend, worker::{WorkerExt, WorkerHandle}},
+    debug::{GameTelemetry, RendererTelemetry}, game::{Game, GameInit, GameMsg}, gpu::ctx::VulkanCtx, inbound_aux_channels, render::{Renderer, RendererInit, RendererMsg}, sync::{chan::SafeSend, worker::{AuxRx, AuxTx, WorkerExt, WorkerHandle}}
 };
+
+inbound_aux_channels!(App, {
+    Game => {
+        game_telemetry: [GameTelemetry; 64] => handle_game_telemetry,
+    },
+    Renderer => {
+        renderer_telemetry: [RendererTelemetry; 64] => handle_renderer_telemetry,
+    },
+});
 
 pub struct App {
     win: Option<Arc<Window>>,
@@ -21,6 +27,8 @@ pub struct App {
     // egui_ctx: egui::Context,
     // egui_state: Option<egui_winit::State>,
 
+    aux_tx: Option<AppAuxTx>,
+    aux_rx: Option<AppAuxRx>,
     game: WorkerHandle<Game>,
     renderer: WorkerHandle<Renderer>,
 }
@@ -29,21 +37,31 @@ impl App {
     pub fn new() -> Self {
         // let egui_ctx = egui::Context::default();
 
+        let (aux_tx, aux_rx) = AppAuxTx::new();
+
         Self {
             win: None,
             // egui_ctx,
             // egui_state: None,
+            aux_tx: Some(aux_tx),
+            aux_rx: Some(aux_rx),
             game: Game::spawn(),
             renderer: Renderer::spawn(),
         }
+    }
+
+    fn handle_game_telemetry(&mut self, msg: GameTelemetry) {
+        // TODO
+    }
+
+    fn handle_renderer_telemetry(&mut self, msg: RendererTelemetry) {
+        // TODO
     }
 }
 
 impl ApplicationHandler for App {
     // on desktop platforms, this is only called once
     fn resumed(&mut self, evt_loop: &ActiveEventLoop) {
-        evt_loop.set_control_flow(ControlFlow::Wait);
-
         let win = Arc::new(evt_loop
             .create_window(WindowAttributes::default())
             .expect("failed to open window"),
@@ -65,12 +83,17 @@ impl ApplicationHandler for App {
             )
             .expect("failed to init Vulkan");
 
-        self.renderer.init(RenderInit {
+        let mut aux_tx = self.aux_tx.take().expect("failed to get aux_tx");
+
+        self.renderer.init(RendererInit {
             ctx: Arc::new(ctx),
             win: win.clone(),
+            telemetry_tx: aux_tx.take_renderer().unwrap().renderer_telemetry,
         });
 
-        self.game.init(GameInit { win });
+        self.game.init(GameInit {
+            win,
+        });
     }
 
     fn window_event(
@@ -93,9 +116,15 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => {
                 evt_loop.exit();
             }
+            WindowEvent::RedrawRequested => {
+                if let Some(mut aux_rx) = self.aux_rx.take() {
+                    aux_rx.drain_all(self);
+                    self.aux_rx = Some(aux_rx);
+                }
+            }
             WindowEvent::Resized(_) => {
                 self.game.tx.send(GameMsg::Resized);
-                self.renderer.tx.send(RenderMsg::Resized);
+                self.renderer.tx.send(RendererMsg::Resized);
             },
             WindowEvent::MouseInput { state, button, .. } => {
                 if consumed {
@@ -111,6 +140,8 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
+
+        self.win.as_ref().unwrap().request_redraw();
     }
 
     fn device_event(

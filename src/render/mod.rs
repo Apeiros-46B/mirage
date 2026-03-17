@@ -7,24 +7,26 @@ use rtrb::{Consumer, Producer};
 use winit::window::Window;
 
 use crate::{
+    debug::RendererTelemetry,
     gpu::{ctx::VulkanCtx, pass::Task},
     render::{
         passes::{ClearPass, FrameCtx, PresentPass, depth::DepthPrepass},
         present::Presenter,
     },
-    sync::{chan::bounded, worker::{Worker, inbound_aux_channels}},
+    sync::{chan::{SafeSend, bounded}, worker::Worker},
 };
 
 // inbound_aux_channels!(Renderer, {
 //     ui: [UiMsg; 1024] => handle_ui_msg,
 // });
 
-pub struct RenderInit {
+pub struct RendererInit {
     pub ctx: Arc<VulkanCtx>,
     pub win: Arc<Window>,
+    pub telemetry_tx: Producer<RendererTelemetry>,
 }
 
-pub enum RenderMsg {
+pub enum RendererMsg {
     Resized,
 }
 
@@ -33,12 +35,13 @@ pub struct Renderer {
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
     present_pass: PresentPass,
+    telemetry_tx: Producer<RendererTelemetry>,
     ctx: Arc<VulkanCtx>,
 }
 
 impl Worker for Renderer {
-    type Init = RenderInit;
-    type Msg = RenderMsg;
+    type Init = RendererInit;
+    type Msg = RendererMsg;
     type Tx = Producer<Self::Msg>;
     type Rx = Consumer<Self::Msg>;
 
@@ -49,7 +52,7 @@ impl Worker for Renderer {
         bounded(8192)
     }
 
-    fn new(init: RenderInit) -> anyhow::Result<Self> {
+    fn new(init: RendererInit) -> anyhow::Result<Self> {
         let ctx = init.ctx;
         let extent = crate::util::extent_of(&init.win);
         let presenter = Presenter::new(&ctx, init.win)?;
@@ -59,11 +62,12 @@ impl Worker for Renderer {
         let present_pass = PresentPass;
 
         Ok(Self {
-            ctx,
             presenter,
             clear_pass,
             depth_prepass,
             present_pass,
+            telemetry_tx: init.telemetry_tx,
+            ctx,
         })
     }
 
@@ -73,6 +77,9 @@ impl Worker for Renderer {
         dt: Duration,
         tick: usize,
     ) -> anyhow::Result<()> {
+        let dt_f = dt.as_secs_f32();
+        self.telemetry_tx.send(RendererTelemetry { frame_time: dt_f });
+
         let Some((target, cmd, resize)) = self.presenter.begin_frame(&self.ctx)? else {
             return Ok(()); // minimized or out-of-date, skip drawing
         };
@@ -86,7 +93,7 @@ impl Worker for Renderer {
         let frame = FrameCtx {
             frame_idx: tick,
             time: elapsed.as_secs_f64(),
-            dt: dt.as_secs_f32(),
+            dt: dt_f,
             target,
             swapchain_base_barrier: self.presenter.swapchain.base_barrier(),
         };
@@ -100,9 +107,9 @@ impl Worker for Renderer {
         self.presenter.submit_frame(&self.ctx)
     }
 
-    fn handle(&mut self, msg: RenderMsg) {
+    fn handle(&mut self, msg: RendererMsg) {
         match msg {
-            RenderMsg::Resized => self.presenter.resize_requested = true,
+            RendererMsg::Resized => self.presenter.resize_requested = true,
         }
     }
 }
