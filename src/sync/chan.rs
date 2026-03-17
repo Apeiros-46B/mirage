@@ -1,4 +1,9 @@
-use std::{sync::{Arc, Condvar, Mutex, OnceLock, atomic::{AtomicBool, Ordering}}, thread, time::Instant};
+use std::{
+    marker::PhantomData,
+    sync::{Arc, Condvar, Mutex, OnceLock, atomic::{AtomicBool, Ordering}},
+    thread,
+    time::Instant,
+};
 
 use rtrb::RingBuffer;
 
@@ -172,40 +177,50 @@ impl<T> ConsumerOneshot<T> {
 }
 // }}}
 
-// {{{ bundle of non-blocking queues for auxiliary worker communication
-/// A receiver paired with a handler function.
-pub struct AuxRxSlot<T, W> {
-    // this only accepts non-blocking queues because auxiliary communication
-    // between workers should not be blocking or have tick deadlines anyway
-    rx: Consumer<T>,
-    handler: fn(&mut W, T),
+// {{{ bundle of Rx<T> for auxiliary worker communication
+pub trait HandleAux<M> {
+    fn handle_aux(&mut self, msg: M);
 }
 
-impl<T, W> AuxRxSlot<T, W> {
-    pub fn new(rx: Consumer<T>, handler: fn(&mut W, T)) -> Self {
-        Self { rx, handler }
-    }
+pub struct AuxRxSlot<T, R> {
+    rx: R,
+    // use `fn() -> M` so it doesn't affect Send/Sync
+    _marker: PhantomData<fn() -> T>,
+}
 
-    fn drain(&mut self, worker: &mut W) {
-        while let Ok(msg) = self.rx.pop() {
-            (self.handler)(worker, msg);
+impl<T, R: Rx<T>> AuxRxSlot<T, R> {
+    pub fn new(rx: R) -> Self {
+        Self {
+            rx,
+            _marker: PhantomData,
         }
     }
 }
 
-/// A bundle of heterogeneous receivers that can be drained into a worker.
+impl<T, R: Rx<T>> From<R> for AuxRxSlot<T, R> {
+    fn from(rx: R) -> Self {
+        Self::new(rx)
+    }
+}
+
 pub trait AuxRxBundle<W>: Send + 'static {
     fn drain_all(&mut self, worker: &mut W);
 }
 
-// workers with only a primary queue have an empty bundle
 impl<W> AuxRxBundle<W> for () {
     fn drain_all(&mut self, _: &mut W) {}
 }
 
-impl<W: 'static, T: Send + 'static> AuxRxBundle<W> for AuxRxSlot<T, W> {
+impl<T, R, W> AuxRxBundle<W> for AuxRxSlot<T, R>
+where
+    T: Send + 'static,
+    R: Rx<T>,
+    W: HandleAux<T>,
+{
     fn drain_all(&mut self, worker: &mut W) {
-        self.drain(worker);
+        while let Ok(msg) = self.rx.pop() {
+            worker.handle_aux(msg);
+        }
     }
 }
 
