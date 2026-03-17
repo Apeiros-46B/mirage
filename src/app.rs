@@ -14,12 +14,12 @@ use crate::{
     gpu::ctx::VulkanCtx,
     render::{Renderer, RendererInit, RendererMsg},
     sync::{
-        chan::SafeSend,
-        worker::{AuxRx, AuxTx, WorkerExt, WorkerHandle, inbound_aux_channels},
-    }
+        chan::{RxBundle, SafeSend, TxBundle, make_tx_rx_bundles_for},
+        worker::{WorkerExt, WorkerHandle},
+    },
 };
 
-inbound_aux_channels!(App, {
+make_tx_rx_bundles_for!(App, {
     Game => {
         telemetry: [GameTelemetry; 64] => handle_game_telemetry,
     },
@@ -35,8 +35,8 @@ pub struct App {
     egui_state: Option<egui_winit::State>,
     win: Option<Arc<Window>>,
 
-    aux_tx: Option<AppAuxTx>,
-    aux_rx: Option<AppAuxRx>,
+    aux_tx: Option<AppTxBundle>,
+    aux_rx: Option<AppRxBundle>,
     game: WorkerHandle<Game>,
     renderer: WorkerHandle<Renderer>,
 }
@@ -45,7 +45,7 @@ impl App {
     pub fn new() -> Self {
         let egui_ctx = egui::Context::default();
 
-        let (aux_tx, aux_rx) = AppAuxTx::new();
+        let (aux_tx, aux_rx) = AppTxBundle::new();
 
         Self {
             initialised: false,

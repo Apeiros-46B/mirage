@@ -3,106 +3,8 @@ use std::{
 };
 
 use crate::sync::chan::{
-    ProducerOneshot, Rx, RxBlocking, Tx, oneshot
+    ProducerOneshot, Rx, RxBlocking, RxBundle, Tx, TxBundle, oneshot
 };
-
-// {{{ declarative auxiliary channel setup for workers
-pub trait AuxTx<W>: Sized + Send + 'static {
-    type Rx: AuxRx<W>;
-    /// construct all channel pairs
-    fn new() -> (Self, Self::Rx);
-}
-
-pub trait AuxRx<W>: Send + 'static {
-    /// drains all channels without blocking, routing messages to worker methods
-    fn drain_all(&mut self, worker: &mut W);
-}
-
-// workers with no auxiliary channels
-impl<W> AuxTx<W> for () {
-    type Rx = ();
-    fn new() -> ((), ()) { ((), ()) }
-}
-
-impl<W> AuxRx<W> for () {
-    fn drain_all(&mut self, _worker: &mut W) {}
-}
-
-#[macro_export]
-macro_rules! inbound_aux_channels {
-    (
-        $worker:ident, {
-            $(
-                $source:ident => {
-                    $( $field:ident : [ $msg:ty ; $size:expr ] => $handler:ident ),* $(,)?
-                }
-            ),* $(,)?
-        }
-    ) => {
-        paste::paste! {
-            pub struct [<$worker AuxTx>] {
-                $(
-                    $(pub [<$source:snake _ $field>]: Option<rtrb::Producer<$msg>>,)*
-                )*
-            }
-
-            pub struct [<$worker AuxRx>] {
-                $(
-                    $(pub [<$source:snake _ $field>]: rtrb::Consumer<$msg>,)*
-                )*
-            }
-
-            $(
-                pub struct [<$source To $worker>] {
-                    $(pub $field: rtrb::Producer<$msg>,)*
-                }
-            )*
-
-            impl [<$worker AuxTx>] {
-                $(
-                    pub fn [<take_ $source:snake>](&mut self) -> Option<[<$source To $worker>]> {
-                        Some([<$source To $worker>] {
-                            $(
-                                $field: self.[<$source:snake _ $field>].take()?,
-                            )*
-                        })
-                    }
-                )*
-            }
-
-            impl $crate::sync::worker::AuxTx<$worker> for [<$worker AuxTx>] {
-                type Rx = [<$worker AuxRx>];
-
-                fn new() -> (Self, Self::Rx) {
-                    $(
-                        $(
-                            let ([<$source:snake _ $field _tx>], [<$source:snake _ $field _rx>]) = rtrb::RingBuffer::new($size);
-                        )*
-                    )*
-                    (
-                        Self { $($([<$source:snake _ $field>]: Some([<$source:snake _ $field _tx>]),)*)* },
-                        Self::Rx { $($([<$source:snake _ $field>]: [<$source:snake _ $field _rx>],)*)* },
-                    )
-                }
-            }
-
-            impl $crate::sync::worker::AuxRx<$worker> for [<$worker AuxRx>] {
-                fn drain_all(&mut self, worker: &mut $worker) {
-                    $(
-                        $(
-                            while let Ok(msg) = self.[<$source:snake _ $field>].pop() {
-                                worker.$handler(msg);
-                            }
-                        )*
-                    )*
-                }
-            }
-        }
-    };
-}
-
-pub(crate) use inbound_aux_channels;
-// }}}
 
 pub trait Worker: Sized {
     type Init: Send + 'static;
@@ -111,8 +13,8 @@ pub trait Worker: Sized {
     type Tx: Tx<Self::Msg>;
     type Rx: Rx<Self::Msg>;
 
-    type AuxTx: AuxTx<Self, Rx = Self::AuxRx>;
-    type AuxRx: AuxRx<Self>;
+    type AuxTx: TxBundle<Self, Rx = Self::AuxRx>;
+    type AuxRx: RxBundle<Self>;
 
     fn channel() -> (Self::Tx, Self::Rx);
 
@@ -171,7 +73,7 @@ pub trait WorkerExt: Worker + seal::Sealed {
 
 impl<T: Worker> WorkerExt for T {
     fn aux_channels() -> (Self::AuxTx, Self::AuxRx)  {
-        <Self::AuxTx as AuxTx<Self>>::new()
+        <Self::AuxTx as TxBundle<Self>>::new()
     }
 
     fn run_free(

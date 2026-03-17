@@ -246,3 +246,101 @@ impl<T, Q: SafeSend<T>> SafeSendOpt<T> for Option<Q> {
     }
 }
 // }}}
+
+// {{{ declarative configuration of collections of ringbufs
+pub trait TxBundle<D>: Sized + Send + 'static {
+    type Rx: RxBundle<D>;
+    /// construct all channel pairs
+    fn new() -> (Self, Self::Rx);
+}
+
+pub trait RxBundle<D>: Send + 'static {
+    /// drains all channels without blocking, routing messages to destination methods
+    fn drain_all(&mut self, dest: &mut D);
+}
+
+// utility for workers with no auxiliary channels
+impl<D> TxBundle<D> for () {
+    type Rx = ();
+    fn new() -> ((), ()) { ((), ()) }
+}
+
+impl<D> RxBundle<D> for () {
+    fn drain_all(&mut self, _worker: &mut D) {}
+}
+
+#[macro_export]
+macro_rules! make_tx_rx_bundles_for {
+    (
+        $dest:ident, {
+            $(
+                $source:ident => {
+                    $( $field:ident : [ $msg:ty ; $size:expr ] => $handler:ident ),* $(,)?
+                }
+            ),* $(,)?
+        }
+    ) => {
+        paste::paste! {
+            pub struct [<$dest TxBundle>] {
+                $(
+                    $(pub [<$source:snake _ $field>]: Option<rtrb::Producer<$msg>>,)*
+                )*
+            }
+
+            pub struct [<$dest RxBundle>] {
+                $(
+                    $(pub [<$source:snake _ $field>]: rtrb::Consumer<$msg>,)*
+                )*
+            }
+
+            $(
+                pub struct [<$source To $dest>] {
+                    $(pub $field: rtrb::Producer<$msg>,)*
+                }
+            )*
+
+            impl [<$dest TxBundle>] {
+                $(
+                    pub fn [<take_ $source:snake>](&mut self) -> Option<[<$source To $dest>]> {
+                        Some([<$source To $dest>] {
+                            $(
+                                $field: self.[<$source:snake _ $field>].take()?,
+                            )*
+                        })
+                    }
+                )*
+            }
+
+            impl $crate::sync::chan::TxBundle<$dest> for [<$dest TxBundle>] {
+                type Rx = [<$dest RxBundle>];
+
+                fn new() -> (Self, Self::Rx) {
+                    $(
+                        $(
+                            let ([<$source:snake _ $field _tx>], [<$source:snake _ $field _rx>]) = rtrb::RingBuffer::new($size);
+                        )*
+                    )*
+                    (
+                        Self { $($([<$source:snake _ $field>]: Some([<$source:snake _ $field _tx>]),)*)* },
+                        Self::Rx { $($([<$source:snake _ $field>]: [<$source:snake _ $field _rx>],)*)* },
+                    )
+                }
+            }
+
+            impl $crate::sync::chan::RxBundle<$dest> for [<$dest RxBundle>] {
+                fn drain_all(&mut self, dest: &mut $dest) {
+                    $(
+                        $(
+                            while let Ok(msg) = self.[<$source:snake _ $field>].pop() {
+                                dest.$handler(msg);
+                            }
+                        )*
+                    )*
+                }
+            }
+        }
+    };
+}
+
+pub(crate) use make_tx_rx_bundles_for;
+// }}}
