@@ -2,14 +2,17 @@ pub mod camera;
 pub mod input;
 
 use std::{sync::{Arc, atomic::AtomicBool}, time::Duration};
+
+use rtrb::Producer;
 use winit::{event::{ElementState, MouseButton}, keyboard::PhysicalKey, window::Window};
 
 use crate::{
+    debug::GameTelemetry,
     game::{camera::Camera, input::InputState},
     sync::{
-        chan::{ConsumerDeadline, ProducerDeadline, bounded_deadline},
+        chan::{ConsumerDeadline, ProducerDeadline, SafeSend, bounded_deadline},
         worker::{Worker, WorkerExt},
-    },
+    }
 };
 
 pub trait Polled {
@@ -19,6 +22,7 @@ pub trait Polled {
 
 pub struct GameInit {
     pub win: Arc<Window>,
+    pub telemetry_tx: Producer<GameTelemetry>,
 }
 
 pub enum GameMsg {
@@ -32,6 +36,7 @@ pub struct Game {
     input: InputState,
     camera: Camera,
     win: Arc<Window>,
+    telemetry_tx: Producer<GameTelemetry>,
 }
 
 impl Worker for Game {
@@ -52,6 +57,7 @@ impl Worker for Game {
             input: InputState::new(),
             camera: Camera::new(init.win.inner_size()),
             win: init.win,
+            telemetry_tx: init.telemetry_tx,
         })
     }
 
@@ -61,8 +67,13 @@ impl Worker for Game {
         dt: Duration,
         _tick: usize,
     ) -> anyhow::Result<()> {
-        self.camera.poll(&mut self.input, dt.as_secs_f32());
+        let dt_f = dt.as_secs_f32();
+
+        self.telemetry_tx.send(GameTelemetry { tick_time: dt_f });
+
+        self.camera.poll(&mut self.input, dt_f);
         self.input.reset_keys();
+
         Ok(())
     }
 

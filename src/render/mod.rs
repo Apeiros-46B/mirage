@@ -54,6 +54,7 @@ impl Worker for Renderer {
 
     fn new(init: RendererInit) -> anyhow::Result<Self> {
         let ctx = init.ctx;
+        let telemetry_tx = init.telemetry_tx;
         let extent = crate::util::extent_of(&init.win);
         let presenter = Presenter::new(&ctx, init.win)?;
 
@@ -66,7 +67,7 @@ impl Worker for Renderer {
             clear_pass,
             depth_prepass,
             present_pass,
-            telemetry_tx: init.telemetry_tx,
+            telemetry_tx,
             ctx,
         })
     }
@@ -78,6 +79,7 @@ impl Worker for Renderer {
         tick: usize,
     ) -> anyhow::Result<()> {
         let dt_f = dt.as_secs_f32();
+
         self.telemetry_tx.send(RendererTelemetry { frame_time: dt_f });
 
         let Some((target, cmd, resize)) = self.presenter.begin_frame(&self.ctx)? else {

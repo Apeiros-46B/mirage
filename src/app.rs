@@ -22,10 +22,9 @@ inbound_aux_channels!(App, {
 });
 
 pub struct App {
+    egui_ctx: egui::Context,
+    egui_state: Option<egui_winit::State>,
     win: Option<Arc<Window>>,
-
-    // egui_ctx: egui::Context,
-    // egui_state: Option<egui_winit::State>,
 
     aux_tx: Option<AppAuxTx>,
     aux_rx: Option<AppAuxRx>,
@@ -35,14 +34,14 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
-        // let egui_ctx = egui::Context::default();
+        let egui_ctx = egui::Context::default();
 
         let (aux_tx, aux_rx) = AppAuxTx::new();
 
         Self {
+            egui_ctx,
+            egui_state: None,
             win: None,
-            // egui_ctx,
-            // egui_state: None,
             aux_tx: Some(aux_tx),
             aux_rx: Some(aux_rx),
             game: Game::spawn(),
@@ -67,14 +66,14 @@ impl ApplicationHandler for App {
             .expect("failed to open window"),
         );
         self.win = Some(win.clone());
-        // self.egui_state = Some(egui_winit::State::new(
-        //     self.egui_ctx.clone(),
-        //     egui::ViewportId::ROOT,
-        //     &win,
-        //     Some(win.scale_factor() as f32),
-        //     None,
-        //     None,
-        // ));
+        self.egui_state = Some(egui_winit::State::new(
+            self.egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            &win,
+            Some(win.scale_factor() as f32),
+            None,
+            None,
+        ));
 
         let ctx = VulkanCtx::new(
                 win.display_handle().expect("failed to get display").as_raw(),
@@ -93,6 +92,7 @@ impl ApplicationHandler for App {
 
         self.game.init(GameInit {
             win,
+            telemetry_tx: aux_tx.take_game().unwrap().game_telemetry,
         });
     }
 
@@ -107,10 +107,10 @@ impl ApplicationHandler for App {
         };
 
         let mut consumed = false;
-        // if let Some(egui_state) = &mut self.egui_state {
-        //     let res = egui_state.on_window_event(win, &evt);
-        //     consumed = res.consumed;
-        // }
+        if let Some(egui_state) = &mut self.egui_state {
+            let res = egui_state.on_window_event(win, &evt);
+            consumed = res.consumed;
+        }
 
         match evt {
             WindowEvent::CloseRequested => {
