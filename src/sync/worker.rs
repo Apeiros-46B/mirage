@@ -3,7 +3,7 @@ use std::{
 };
 
 use crate::sync::chan::{
-    ProducerOneshot, Rx, RxDeadline, Tx, oneshot
+    ProducerOneshot, Rx, RxBlocking, Tx, oneshot
 };
 
 // {{{ declarative auxiliary channel setup for workers
@@ -42,13 +42,13 @@ macro_rules! inbound_aux_channels {
         paste::paste! {
             pub struct [<$worker AuxTx>] {
                 $(
-                    $(pub $field: Option<rtrb::Producer<$msg>>,)*
+                    $(pub [<$source:snake _ $field>]: Option<rtrb::Producer<$msg>>,)*
                 )*
             }
 
             pub struct [<$worker AuxRx>] {
                 $(
-                    $(pub $field: rtrb::Consumer<$msg>,)*
+                    $(pub [<$source:snake _ $field>]: rtrb::Consumer<$msg>,)*
                 )*
             }
 
@@ -63,7 +63,7 @@ macro_rules! inbound_aux_channels {
                     pub fn [<take_ $source:snake>](&mut self) -> Option<[<$source To $worker>]> {
                         Some([<$source To $worker>] {
                             $(
-                                $field: self.$field.take()?,
+                                $field: self.[<$source:snake _ $field>].take()?,
                             )*
                         })
                     }
@@ -76,12 +76,12 @@ macro_rules! inbound_aux_channels {
                 fn new() -> (Self, Self::Rx) {
                     $(
                         $(
-                            let ([<$field _tx>], [<$field _rx>]) = rtrb::RingBuffer::new($size);
+                            let ([<$source:snake _ $field _tx>], [<$source:snake _ $field _rx>]) = rtrb::RingBuffer::new($size);
                         )*
                     )*
                     (
-                        Self { $($($field: Some([<$field _tx>]),)*)* },
-                        Self::Rx { $($($field: [<$field _rx>],)*)* },
+                        Self { $($([<$source:snake _ $field>]: Some([<$source:snake _ $field _tx>]),)*)* },
+                        Self::Rx { $($([<$source:snake _ $field>]: [<$source:snake _ $field _rx>],)*)* },
                     )
                 }
             }
@@ -90,7 +90,7 @@ macro_rules! inbound_aux_channels {
                 fn drain_all(&mut self, worker: &mut $worker) {
                     $(
                         $(
-                            while let Ok(msg) = self.$field.pop() {
+                            while let Ok(msg) = self.[<$source:snake _ $field>].pop() {
                                 worker.$handler(msg);
                             }
                         )*
@@ -156,7 +156,7 @@ pub trait WorkerExt: Worker + seal::Sealed {
         aux_rx: Self::AuxRx,
         should_exit: Arc<AtomicBool>,
         tickrate_hz: f64,
-    ) where Self::Rx: RxDeadline<Self::Msg>;
+    ) where Self::Rx: RxBlocking<Self::Msg>;
 
     fn main_loop(
         &mut self,
@@ -192,7 +192,7 @@ impl<T: Worker> WorkerExt for T {
         aux_rx: Self::AuxRx,
         should_exit: Arc<AtomicBool>,
         tickrate_hz: f64,
-    ) where Self::Rx: RxDeadline<Self::Msg> {
+    ) where Self::Rx: RxBlocking<Self::Msg> {
         let tick_dur = Duration::from_secs_f64(1.0 / tickrate_hz);
         let next = Cell::new(Instant::now() + tick_dur);
 

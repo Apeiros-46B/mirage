@@ -3,14 +3,14 @@ pub mod input;
 
 use std::{sync::{Arc, atomic::AtomicBool}, time::Duration};
 
-use rtrb::Producer;
 use winit::{event::{ElementState, MouseButton}, keyboard::PhysicalKey, window::Window};
 
 use crate::{
+    app::GameToApp,
     debug::GameTelemetry,
     game::{camera::Camera, input::InputState},
     sync::{
-        chan::{ConsumerDeadline, ProducerDeadline, SafeSend, bounded_deadline},
+        chan::{ConsumerBlocking, ProducerBlocking, SafeSend, bounded_deadline},
         worker::{Worker, WorkerExt},
     }
 };
@@ -22,7 +22,7 @@ pub trait Polled {
 
 pub struct GameInit {
     pub win: Arc<Window>,
-    pub telemetry_tx: Producer<GameTelemetry>,
+    pub app_tx: GameToApp,
 }
 
 pub enum GameMsg {
@@ -36,14 +36,14 @@ pub struct Game {
     input: InputState,
     camera: Camera,
     win: Arc<Window>,
-    telemetry_tx: Producer<GameTelemetry>,
+    app_tx: GameToApp,
 }
 
 impl Worker for Game {
     type Init = GameInit;
     type Msg = GameMsg;
-    type Tx = ProducerDeadline<Self::Msg>;
-    type Rx = ConsumerDeadline<Self::Msg>;
+    type Tx = ProducerBlocking<Self::Msg>;
+    type Rx = ConsumerBlocking<Self::Msg>;
 
     type AuxTx = ();
     type AuxRx = ();
@@ -57,7 +57,7 @@ impl Worker for Game {
             input: InputState::new(),
             camera: Camera::new(init.win.inner_size()),
             win: init.win,
-            telemetry_tx: init.telemetry_tx,
+            app_tx: init.app_tx,
         })
     }
 
@@ -69,7 +69,7 @@ impl Worker for Game {
     ) -> anyhow::Result<()> {
         let dt_f = dt.as_secs_f32();
 
-        self.telemetry_tx.send(GameTelemetry { tick_time: dt_f });
+        self.app_tx.telemetry.send(GameTelemetry { tick_time: dt_f });
 
         self.camera.poll(&mut self.input, dt_f);
         self.input.reset_keys();

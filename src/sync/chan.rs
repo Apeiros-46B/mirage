@@ -22,16 +22,18 @@ pub trait Rx<T>: Send + 'static {
     }
 }
 
-pub trait RxDeadline<T>: Rx<T> {
+pub trait RxBlocking<T>: Rx<T> {
     // called before usage on the thread that will be parked
     fn use_current_thread(&self) {}
 
-    fn pop_deadline(&mut self, deadline: Instant) -> Option<T>;
+    fn recv(&mut self) -> T;
+
+    fn recv_deadline(&mut self, deadline: Instant) -> Option<T>;
 
     fn drain_deadline<F>(&mut self, deadline: Instant, mut f: F)
     where F: FnMut(T)
     {
-        while let Some(msg) = self.pop_deadline(deadline) {
+        while let Some(msg) = self.recv_deadline(deadline) {
             f(msg);
 
             while let Ok(extra_msg) = self.pop() {
@@ -69,32 +71,32 @@ pub fn bounded<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
 }
 // }}}
 
-// {{{ deadline blocking wrapper for rtrb queues
-pub struct ProducerDeadline<T> {
+// {{{ blocking wrapper for rtrb queues
+pub struct ProducerBlocking<T> {
     tx: Producer<T>,
     sleeping: Arc<AtomicBool>,
     consumer: Arc<OnceLock<thread::Thread>>,
 }
 
-pub struct ConsumerDeadline<T> {
+pub struct ConsumerBlocking<T> {
     rx: Consumer<T>,
     sleeping: Arc<AtomicBool>,
     thread_slot: Arc<OnceLock<thread::Thread>>,
 }
 
 pub fn bounded_deadline<T>(capacity: usize)
-    -> (ProducerDeadline<T>, ConsumerDeadline<T>)
+    -> (ProducerBlocking<T>, ConsumerBlocking<T>)
 {
     let (tx, rx) = RingBuffer::new(capacity);
     let sleeping = Arc::new(AtomicBool::new(false));
     let slot = Arc::new(OnceLock::new());
     (
-        ProducerDeadline { tx, sleeping: sleeping.clone(), consumer: slot.clone() },
-        ConsumerDeadline { rx, sleeping, thread_slot: slot },
+        ProducerBlocking { tx, sleeping: sleeping.clone(), consumer: slot.clone() },
+        ConsumerBlocking { rx, sleeping, thread_slot: slot },
     )
 }
 
-impl<T: Send + 'static> Tx<T> for ProducerDeadline<T> {
+impl<T: Send + 'static> Tx<T> for ProducerBlocking<T> {
     fn push(&mut self, msg: T) -> Result<(), PushError<T>> {
         self.tx.push(msg)?;
         if self.sleeping.load(Ordering::Acquire) {
@@ -106,18 +108,39 @@ impl<T: Send + 'static> Tx<T> for ProducerDeadline<T> {
     }
 }
 
-impl<T: Send + 'static> Rx<T> for ConsumerDeadline<T> {
+impl<T: Send + 'static> Rx<T> for ConsumerBlocking<T> {
     fn pop(&mut self) -> Result<T, PopError> {
         self.rx.pop()
     }
 }
 
-impl<T: Send + 'static> RxDeadline<T> for ConsumerDeadline<T> {
+impl<T: Send + 'static> RxBlocking<T> for ConsumerBlocking<T> {
     fn use_current_thread(&self) {
         self.thread_slot.get_or_init(thread::current);
     }
 
-    fn pop_deadline(&mut self, deadline: Instant) -> Option<T> {
+    fn recv(&mut self) -> T {
+        loop {
+            if let Ok(msg) = self.rx.pop() {
+                return msg;
+            }
+
+            self.sleeping.store(true, Ordering::Release);
+
+            // re-check because sender might have pushed a message between our first
+            // pop and the previous flag update
+            if let Ok(msg) = self.rx.pop() {
+                self.sleeping.store(false, Ordering::Release);
+                return msg;
+            }
+
+            thread::park();
+
+            self.sleeping.store(false, Ordering::Release);
+        }
+    }
+
+    fn recv_deadline(&mut self, deadline: Instant) -> Option<T> {
         loop {
             if let Ok(msg) = self.rx.pop() {
                 return Some(msg);
@@ -130,8 +153,6 @@ impl<T: Send + 'static> RxDeadline<T> for ConsumerDeadline<T> {
 
             self.sleeping.store(true, Ordering::Release);
 
-            // re-check because sender might have pushed a message between our first
-            // pop and the previous flag update
             if let Ok(msg) = self.rx.pop() {
                 self.sleeping.store(false, Ordering::Release);
                 return Some(msg);

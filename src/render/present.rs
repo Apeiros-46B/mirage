@@ -231,7 +231,8 @@ impl Swapchain {
     fn choose_mode(&self, ctx: &VulkanCtx) -> anyhow::Result<vk::PresentModeKHR> {
         let modes = ctx.surf.get_modes(&ctx.gpu)?;
         Ok(modes.into_iter()
-            .find(|&m| m == vk::PresentModeKHR::MAILBOX)
+            .find(|&m| m == vk::PresentModeKHR::FIFO)
+            // .find(|&m| m == vk::PresentModeKHR::MAILBOX)
             .unwrap_or(vk::PresentModeKHR::FIFO)
         )
     }

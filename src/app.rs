@@ -2,26 +2,35 @@ use std::{sync::Arc, time::Duration};
 
 use winit::{
     application::ApplicationHandler,
-    event::{DeviceEvent, DeviceId, WindowEvent},
+    event::{DeviceEvent, DeviceId, StartCause, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow},
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::{Window, WindowAttributes, WindowId},
 };
 
 use crate::{
-    debug::{GameTelemetry, RendererTelemetry}, game::{Game, GameInit, GameMsg}, gpu::ctx::VulkanCtx, inbound_aux_channels, render::{Renderer, RendererInit, RendererMsg}, sync::{chan::SafeSend, worker::{AuxRx, AuxTx, WorkerExt, WorkerHandle}}
+    debug::{GameTelemetry, RendererTelemetry},
+    game::{Game, GameInit, GameMsg},
+    gpu::ctx::VulkanCtx,
+    render::{Renderer, RendererInit, RendererMsg},
+    sync::{
+        chan::SafeSend,
+        worker::{AuxRx, AuxTx, WorkerExt, WorkerHandle, inbound_aux_channels},
+    }
 };
 
 inbound_aux_channels!(App, {
     Game => {
-        game_telemetry: [GameTelemetry; 64] => handle_game_telemetry,
+        telemetry: [GameTelemetry; 64] => handle_game_telemetry,
     },
     Renderer => {
-        renderer_telemetry: [RendererTelemetry; 64] => handle_renderer_telemetry,
+        telemetry: [RendererTelemetry; 64] => handle_renderer_telemetry,
     },
 });
 
 pub struct App {
+    initialised: bool,
+
     egui_ctx: egui::Context,
     egui_state: Option<egui_winit::State>,
     win: Option<Arc<Window>>,
@@ -39,6 +48,7 @@ impl App {
         let (aux_tx, aux_rx) = AppAuxTx::new();
 
         Self {
+            initialised: false,
             egui_ctx,
             egui_state: None,
             win: None,
@@ -59,8 +69,12 @@ impl App {
 }
 
 impl ApplicationHandler for App {
-    // on desktop platforms, this is only called once
     fn resumed(&mut self, evt_loop: &ActiveEventLoop) {
+        if self.initialised {
+            return;
+        }
+        self.initialised = true;
+
         let win = Arc::new(evt_loop
             .create_window(WindowAttributes::default())
             .expect("failed to open window"),
@@ -87,13 +101,38 @@ impl ApplicationHandler for App {
         self.renderer.init(RendererInit {
             ctx: Arc::new(ctx),
             win: win.clone(),
-            telemetry_tx: aux_tx.take_renderer().unwrap().renderer_telemetry,
+            app_tx: aux_tx.take_renderer().unwrap(),
         });
 
         self.game.init(GameInit {
             win,
-            telemetry_tx: aux_tx.take_game().unwrap().game_telemetry,
+            app_tx: aux_tx.take_game().unwrap(),
         });
+    }
+
+    fn about_to_wait(&mut self, evt_loop: &ActiveEventLoop) {
+        // handle incoming messages
+        if let Some(mut aux_rx) = self.aux_rx.take() {
+            aux_rx.drain_all(self);
+            self.aux_rx = Some(aux_rx);
+        }
+
+        // ~60Hz
+        let dur = Duration::from_secs_f64(1.0 / 60.0);
+        evt_loop.set_control_flow(ControlFlow::wait_duration(dur));
+    }
+
+    fn new_events(
+        &mut self,
+        _evt_loop: &ActiveEventLoop,
+        cause: StartCause,
+    ) {
+        // redraw every time we wake up due to sleep timeout
+        if let StartCause::ResumeTimeReached { .. } = cause {
+            if let Some(win) = self.win.as_ref() {
+                win.request_redraw();
+            }
+        }
     }
 
     fn window_event(
@@ -117,10 +156,7 @@ impl ApplicationHandler for App {
                 evt_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                if let Some(mut aux_rx) = self.aux_rx.take() {
-                    aux_rx.drain_all(self);
-                    self.aux_rx = Some(aux_rx);
-                }
+                // TODO: egui
             }
             WindowEvent::Resized(_) => {
                 self.game.tx.send(GameMsg::Resized);
@@ -140,8 +176,6 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
-
-        self.win.as_ref().unwrap().request_redraw();
     }
 
     fn device_event(

@@ -7,6 +7,7 @@ use rtrb::{Consumer, Producer};
 use winit::window::Window;
 
 use crate::{
+    app::RendererToApp,
     debug::RendererTelemetry,
     gpu::{ctx::VulkanCtx, pass::Task},
     render::{
@@ -23,7 +24,7 @@ use crate::{
 pub struct RendererInit {
     pub ctx: Arc<VulkanCtx>,
     pub win: Arc<Window>,
-    pub telemetry_tx: Producer<RendererTelemetry>,
+    pub app_tx: RendererToApp,
 }
 
 pub enum RendererMsg {
@@ -35,7 +36,7 @@ pub struct Renderer {
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
     present_pass: PresentPass,
-    telemetry_tx: Producer<RendererTelemetry>,
+    app_tx: RendererToApp,
     ctx: Arc<VulkanCtx>,
 }
 
@@ -54,7 +55,7 @@ impl Worker for Renderer {
 
     fn new(init: RendererInit) -> anyhow::Result<Self> {
         let ctx = init.ctx;
-        let telemetry_tx = init.telemetry_tx;
+        let app_tx = init.app_tx;
         let extent = crate::util::extent_of(&init.win);
         let presenter = Presenter::new(&ctx, init.win)?;
 
@@ -67,7 +68,7 @@ impl Worker for Renderer {
             clear_pass,
             depth_prepass,
             present_pass,
-            telemetry_tx,
+            app_tx,
             ctx,
         })
     }
@@ -80,7 +81,7 @@ impl Worker for Renderer {
     ) -> anyhow::Result<()> {
         let dt_f = dt.as_secs_f32();
 
-        self.telemetry_tx.send(RendererTelemetry { frame_time: dt_f });
+        self.app_tx.telemetry.send(RendererTelemetry { frame_time: dt_f });
 
         let Some((target, cmd, resize)) = self.presenter.begin_frame(&self.ctx)? else {
             return Ok(()); // minimized or out-of-date, skip drawing
