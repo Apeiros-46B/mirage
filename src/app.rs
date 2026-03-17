@@ -12,7 +12,7 @@ use crate::{
     game::{Game, GameInit, GameMsg},
     gpu::ctx::VulkanCtx,
     render::{RenderInit, RenderMsg, Renderer},
-    sync::worker::{Worker, WorkerHandle},
+    sync::worker::{WorkerExt, WorkerHandle},
 };
 
 pub struct App {

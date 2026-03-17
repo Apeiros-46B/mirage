@@ -1,9 +1,16 @@
-mod app;
-mod game;
+// utility
 mod gpu;
-mod render;
-mod error;
 mod sync;
+mod world;
+
+// workers
+mod audio;
+mod game;
+mod render;
+mod stream;
+
+mod app;
+mod error;
 mod util;
 
 use winit::event_loop::EventLoop;

@@ -111,8 +111,6 @@ impl InputState {
     pub fn handle_input<T>(&mut self, key: T, state: ElementState) where InputBtn: From<T> {
         let input = InputBtn::from(key);
 
-        dbg!(&input);
-
         if state == ElementState::Pressed {
             self.pressed.insert(input);
             self.just_pressed.insert(input);
@@ -125,8 +123,6 @@ impl InputState {
     }
 
     pub fn handle_mouse(&mut self, dx: f32, dy: f32) {
-        dbg!(dx, dy);
-
         self.mouse_delta.0 += dx;
         self.mouse_delta.1 += dy;
     }

@@ -31,7 +31,52 @@ pub trait Worker: Sized {
 
     fn handle(&mut self, msg: Self::Msg);
 
-    // poll as fast as possible with no timing guarantees
+    fn run(
+        self,
+        rx: Self::Rx,
+        aux_rx: Self::AuxRx,
+        should_exit: Arc<AtomicBool>,
+    ) {
+        self.run_free(rx, aux_rx, should_exit);
+    }
+}
+
+// {{{ helper methods for implementing Workers
+mod seal {
+    pub trait Sealed {}
+    impl<T: super::Worker> Sealed for T {}
+}
+
+pub trait WorkerExt: Worker + seal::Sealed {
+    /// poll as quickly as possible
+    fn run_free(
+        self,
+        rx: Self::Rx,
+        aux_rx: Self::AuxRx,
+        should_exit: Arc<AtomicBool>,
+    );
+
+    /// poll with a fixed tickrate and perform subtick event handling
+    fn run_tickrate(
+        self,
+        rx: Self::Rx,
+        aux_rx: Self::AuxRx,
+        should_exit: Arc<AtomicBool>,
+        tickrate_hz: f64,
+    ) where Self::Rx: RxDeadline<Self::Msg>;
+
+    fn main_loop(
+        &mut self,
+        should_exit: Arc<AtomicBool>,
+        aux_rx: Self::AuxRx,
+        pre_tick: impl FnMut(&mut Self),
+        post_tick: impl FnMut(&mut Self),
+    );
+
+    fn spawn() -> WorkerHandle<Self>;
+}
+
+impl<T: Worker> WorkerExt for T {
     fn run_free(
         mut self,
         mut rx: Self::Rx,
@@ -44,7 +89,6 @@ pub trait Worker: Sized {
         );
     }
 
-    // poll with a fixed tickrate and wake up on receiving
     fn run_tickrate(
         mut self,
         mut rx: Self::Rx,
@@ -103,15 +147,6 @@ pub trait Worker: Sized {
         }
     }
 
-    fn run(
-        self,
-        rx: Self::Rx,
-        aux_rx: Self::AuxRx,
-        should_exit: Arc<AtomicBool>,
-    ) {
-        self.run_free(rx, aux_rx, should_exit);
-    }
-
     fn spawn() -> WorkerHandle<Self> {
         let should_exit = Arc::new(AtomicBool::new(false));
         let should_exit_moved = should_exit.clone();
@@ -136,7 +171,9 @@ pub trait Worker: Sized {
         }
     }
 }
+// }}}
 
+// {{{ handle for communication with a spawned worker
 pub struct WorkerHandle<W: Worker> {
     thread: Option<JoinHandle<()>>,
     pub should_exit: Arc<AtomicBool>,
@@ -181,3 +218,4 @@ impl<W: Worker> Drop for WorkerHandle<W> {
         self.exit();
     }
 }
+// }}}

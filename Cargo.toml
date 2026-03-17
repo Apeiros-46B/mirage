@@ -8,6 +8,8 @@ anyhow = "1.0.102"
 ash = "0.38.0"
 ash-window = "0.13.0"
 bytemuck = "1.25.0"
+egui = "0.33.3"
+egui_plot = "0.34.1"
 glam = { version = "0.32.1", features = ["bytemuck"] }
 gpu-allocator = "0.28.0"
 rtrb = "0.3.3"

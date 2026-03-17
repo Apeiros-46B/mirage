@@ -8,7 +8,7 @@ use crate::{
     game::{camera::Camera, input::InputState},
     sync::{
         chan::{ConsumerDeadline, ProducerDeadline, bounded_deadline},
-        worker::Worker,
+        worker::{Worker, WorkerExt},
     },
 };
 
