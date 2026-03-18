@@ -50,13 +50,17 @@ pub enum RendererMsg {
     Resized(PhysicalSize<u32>),
 }
 
+#[derive(Debug)]
 pub struct EguiUpdate {
-    primitives: Vec<ClippedPrimitive>,
-    textures_delta: TexturesDelta,
-    screen_size_px: [u32; 2],
-    pixels_per_point: f32,
+    pub primitives: Vec<ClippedPrimitive>,
+    pub textures_delta: TexturesDelta,
+    pub px_per_pt: f32,
+    pub screen_sz_px: PhysicalSize<u32>,
 }
 
 channel_routing_for!(Renderer {
     primary: [RendererMsg; 8192],
+    App => {
+        egui: [EguiUpdate; 64],
+    }
 });

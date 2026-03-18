@@ -9,20 +9,24 @@ use crate::{
     sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
 };
 use super::msgs::{
+    EguiUpdate,
     RendererInit,
     RendererMsg,
     RendererRxBundle,
     RendererTelemetry,
     RendererToApp,
 };
-use passes::{depth::DepthPrepass, frame::{ClearPass, FrameCtx, PresentPass}};
+use passes::{depth::DepthPrepass, egui::EguiPass, frame::{ClearPass, FrameCtx, PresentPass}};
 use present::Presenter;
 
 pub struct RendererState {
     presenter: Presenter,
+
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
     present_pass: PresentPass,
+    egui_pass: EguiPass,
+
     app_tx: RendererToApp,
     ctx: Arc<VulkanCtx>,
 }
@@ -54,12 +58,14 @@ impl Worker for Renderer {
         let clear_pass = ClearPass;
         let depth_prepass = DepthPrepass::new(&ctx, extent)?;
         let present_pass = PresentPass;
+        let egui_pass = Default::default();
 
         Ok(RendererState {
             presenter,
             clear_pass,
             depth_prepass,
             present_pass,
+            egui_pass,
             app_tx,
             ctx,
         })
@@ -112,5 +118,11 @@ impl MessageHandler<RendererMsg> for RendererState {
         match msg {
             RendererMsg::Resized(sz) => self.presenter.request_resize(sz),
         }
+    }
+}
+
+impl MessageHandler<EguiUpdate> for RendererState {
+    fn handle(&mut self, msg: EguiUpdate) {
+        self.egui_pass.apply_update(msg);
     }
 }

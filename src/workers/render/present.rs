@@ -377,7 +377,6 @@ impl Presenter {
             self.swapchain.recreate(ctx, self.inner_surf_sz)?;
             self.resize_requested = false;
             did_resize = true;
-            println!("resized render to {:?}", self.inner_surf_sz);
         }
 
         let target = match self.swapchain.acquire(frame.img_available_sem)? {

@@ -11,7 +11,7 @@ use winit::{
 use crate::{
     gpu::ctx::VulkanCtx,
     sync::{
-        chan::SafeSend,
+        chan::{SafeSend, SafeSendOpt},
         worker::{MessageHandler, WorkerExt, WorkerHandle},
     },
     workers::{
@@ -19,6 +19,7 @@ use crate::{
         msgs::{
             AppRxBundle,
             AppTxBundle,
+            EguiUpdate,
             GameInit,
             GameMsg,
             GameTelemetry,
@@ -35,6 +36,7 @@ pub struct App {
 
     egui_ctx: egui::Context,
     egui_state: Option<egui_winit::State>,
+    egui_pending_textures: egui::TexturesDelta,
     win: Option<Arc<Window>>,
 
     rx: Option<AppRxBundle>,
@@ -50,6 +52,7 @@ impl App {
             initialised: false,
             egui_ctx,
             egui_state: None,
+            egui_pending_textures: Default::default(),
             win: None,
             rx: None,
             game: Game::spawn(),
@@ -83,6 +86,51 @@ impl App {
     fn suspend_workers(&mut self) {
         self.renderer.suspend();
         self.game.suspend();
+    }
+
+    fn redraw(&mut self, evt_loop: &ActiveEventLoop) {
+        let Some(win) = &self.win else { return };
+
+        let sz = win.inner_size();
+        if sz.width == 0 || sz.height == 0 {
+            // we are minimized, don't do anything
+            return;
+        }
+
+        let Some(egui_state) = &mut self.egui_state else { return };
+
+        let raw_input = egui_state.take_egui_input(win);
+
+        let full_output = self.egui_ctx.run(raw_input, |ctx| {
+            egui::Window::new("Engine Debug").show(ctx, |ui| {
+                ui.label(format!("Frames drawn..."));
+                if ui.button("Quit").clicked() {
+                    evt_loop.exit();
+                }
+            });
+        });
+
+        egui_state.handle_platform_output(win, full_output.platform_output);
+
+        let clipped_primitives = self.egui_ctx.tessellate(
+            full_output.shapes,
+            full_output.pixels_per_point,
+        );
+
+        // aggregate texture deltas in case sending the update fails
+        self.egui_pending_textures.append(full_output.textures_delta);
+
+        let update = EguiUpdate {
+            primitives: clipped_primitives,
+            textures_delta: self.egui_pending_textures.clone(),
+            px_per_pt: full_output.pixels_per_point,
+            screen_sz_px: sz,
+        };
+
+        if self.renderer.aux_tx.app_egui.as_mut().expect("couldn't get egui queue").push(update).is_ok() {
+            // only clear accumulated deltas if submission was successful
+            self.egui_pending_textures.clear();
+        }
     }
 }
 
@@ -161,15 +209,15 @@ impl ApplicationHandler for App {
         if let Some(egui_state) = &mut self.egui_state {
             let res = egui_state.on_window_event(win, &evt);
             consumed = res.consumed;
+
+            if res.repaint {
+                win.request_redraw();
+            }
         }
 
         match evt {
-            WindowEvent::CloseRequested => {
-                evt_loop.exit();
-            }
-            WindowEvent::RedrawRequested => {
-                // TODO: egui
-            }
+            WindowEvent::CloseRequested => evt_loop.exit(),
+            WindowEvent::RedrawRequested => self.redraw(evt_loop),
             WindowEvent::Resized(sz) => {
                 if sz.width != 0 && sz.height != 0 {
                     self.game.tx.send(GameMsg::Resized(sz));
