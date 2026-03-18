@@ -55,13 +55,13 @@ impl App {
 
 impl MessageHandler<GameTelemetry> for App {
     fn handle(&mut self, msg: GameTelemetry) {
-        // TODO
+        dbg!(msg);
     }
 }
 
 impl MessageHandler<RendererTelemetry> for App {
     fn handle(&mut self, msg: RendererTelemetry) {
-        // TODO
+        dbg!(msg);
     }
 }
 
@@ -95,13 +95,13 @@ impl ApplicationHandler for App {
 
         let mut aux_tx = self.aux_tx.take().expect("failed to get aux_tx");
 
-        self.renderer.init(RendererInit {
+        self.renderer.resume(RendererInit {
             ctx: Arc::new(ctx),
             win: win.clone(),
             app_tx: aux_tx.take_renderer().unwrap(),
         });
 
-        self.game.init(GameInit {
+        self.game.resume(GameInit {
             win,
             app_tx: aux_tx.take_game().unwrap(),
         });

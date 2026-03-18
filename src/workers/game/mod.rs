@@ -1,13 +1,13 @@
 pub mod camera;
 pub mod input;
 
-use std::{sync::{Arc, atomic::AtomicBool}, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use winit::{event::{ElementState, MouseButton}, keyboard::PhysicalKey, window::Window};
 
 use crate::sync::{
     chan::{ConsumerBlocking, ProducerBlocking, SafeSend, bounded_deadline},
-    worker::{Worker, WorkerExt},
+    worker::{Worker, WorkerControl, WorkerExt},
 };
 use super::msgs::{GameTelemetry, GameToApp};
 use camera::Camera;
@@ -30,16 +30,21 @@ pub enum GameMsg {
     MouseMotion(f32, f32),
 }
 
-pub struct Game {
+pub struct GameState {
     input: InputState,
     camera: Camera,
     win: Arc<Window>,
     app_tx: GameToApp,
 }
 
+#[derive(Default)]
+pub struct Game;
+
 impl Worker for Game {
+    type State = GameState;
     type Init = GameInit;
     type Msg = GameMsg;
+
     type Tx = ProducerBlocking<Self::Msg>;
     type Rx = ConsumerBlocking<Self::Msg>;
 
@@ -50,8 +55,8 @@ impl Worker for Game {
         bounded_deadline(8192)
     }
 
-    fn new(init: Self::Init) -> anyhow::Result<Self> {
-        Ok(Self {
+    fn on_resume(&self, init: Self::Init) -> anyhow::Result<Self::State> {
+        Ok(GameState {
             input: InputState::new(),
             camera: Camera::new(init.win.inner_size()),
             win: init.win,
@@ -59,41 +64,41 @@ impl Worker for Game {
         })
     }
 
-    fn tick(
-        &mut self,
-        _elapsed: Duration,
-        dt: Duration,
+    fn on_tick(
+        this: &mut Self::State,
+        _since_wake: Duration,
+        since_tick: Duration,
         _tick: usize,
     ) -> anyhow::Result<()> {
-        let dt_f = dt.as_secs_f32();
+        let dt = since_tick.as_secs_f32();
 
-        self.app_tx.telemetry.send(GameTelemetry { tick_time: dt_f });
+        this.app_tx.telemetry.send(GameTelemetry { tick_time: dt });
 
-        self.camera.poll(&mut self.input, dt_f);
-        self.input.reset_keys();
+        this.camera.poll(&mut this.input, dt);
+        this.input.reset_keys();
 
         Ok(())
     }
 
-    fn run(
-        self,
-        rx: Self::Rx,
-        aux_rx: Self::AuxRx,
-        should_exit: Arc<AtomicBool>,
-    ) {
-        self.run_tickrate(rx, aux_rx, should_exit, 120.0);
-    }
-
-    fn handle(&mut self, msg: Self::Msg) {
+    fn on_msg(this: &mut Self::State, msg: Self::Msg) {
         match msg {
-            GameMsg::KeyPress(key, state) => self.input.handle_input(key, state),
-            GameMsg::MouseClick(btn, state) => self.input.handle_input(btn, state),
+            GameMsg::KeyPress(key, state) => this.input.handle_input(key, state),
+            GameMsg::MouseClick(btn, state) => this.input.handle_input(btn, state),
             GameMsg::MouseMotion(dx, dy) => {
-                self.input.handle_mouse(dx, dy);
-                self.camera.poll(&mut self.input, 0.0);
+                this.input.handle_mouse(dx, dy);
+                this.camera.poll(&mut this.input, 0.0);
                 // ^ 0.0 dt to apply mouse movements only
             },
-            GameMsg::Resized => self.camera.resize(self.win.inner_size()),
+            GameMsg::Resized => this.camera.resize(this.win.inner_size()),
         }
+    }
+
+    fn run(
+        self,
+        ctrl: Arc<WorkerControl<Self::Init>>,
+        rx: Self::Rx,
+        aux_rx: Self::AuxRx,
+    ) {
+        self.run_tickrate(ctrl, rx, aux_rx, 120.0);
     }
 }

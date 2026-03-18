@@ -36,6 +36,7 @@ pub trait RxBlocking<T>: Rx<T> {
         while let Some(msg) = self.recv_deadline(deadline) {
             f(msg);
 
+            // try to pop more without recv_deadline which may have expensive checks
             while let Ok(extra_msg) = self.pop() {
                 f(extra_msg);
 
@@ -166,37 +167,6 @@ impl<T: Send + 'static> RxBlocking<T> for ConsumerBlocking<T> {
 }
 // }}}
 
-// {{{ oneshot channels
-type Oneshot<T> = Arc<(Mutex<Option<T>>, Condvar)>;
-
-pub struct ProducerOneshot<T>(Oneshot<T>);
-pub struct ConsumerOneshot<T>(Oneshot<T>);
-
-pub fn oneshot<T>() -> (ProducerOneshot<T>, ConsumerOneshot<T>) {
-    let inner = Arc::new((Mutex::new(None), Condvar::new()));
-    (ProducerOneshot(inner.clone()), ConsumerOneshot(inner))
-}
-
-impl<T> ProducerOneshot<T> {
-    pub fn send(self, item: T) {
-        let (mtx, cvar) = &*self.0;
-        let mut guard = mtx.lock().unwrap();
-        assert!(guard.is_none(), "OneshotTx::send called twice");
-        *guard = Some(item);
-        cvar.notify_one();
-    }
-}
-
-impl<T> ConsumerOneshot<T> {
-    pub fn recv(self) -> Option<T> {
-        let (mtx, cvar) = &*self.0;
-        let mut guard = mtx.lock().unwrap();
-        guard = cvar.wait_while(guard, |v| v.is_none()).unwrap();
-        guard.take()
-    }
-}
-// }}}
-
 // {{{ send safely to a channel and log errors in debug mode
 pub trait SafeSend<T> {
     fn send(&mut self, msg: T);
@@ -221,7 +191,7 @@ impl<T, Q: Tx<T>> SafeSend<T> for Q {
 
     #[cfg(not(debug_assertions))]
     fn send(&mut self, msg: T) {
-        let _ = tx.push(msg);
+        let _ = self.push(msg);
     }
 }
 
@@ -270,7 +240,7 @@ impl<D> TxBundle<D> for () {
 }
 
 impl<D> RxBundle<D> for () {
-    fn drain_all(&mut self, _worker: &mut D) {}
+    fn drain_all(&mut self, _dest: &mut D) {}
 }
 
 #[macro_export]

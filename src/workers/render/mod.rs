@@ -24,7 +24,7 @@ pub enum RendererMsg {
     Resized,
 }
 
-pub struct Renderer {
+pub struct RendererState {
     presenter: Presenter,
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
@@ -33,9 +33,24 @@ pub struct Renderer {
     ctx: Arc<VulkanCtx>,
 }
 
+impl Drop for RendererState {
+    fn drop(&mut self) {
+        // ctx is dropped by the compiler after this is done
+        unsafe {
+            let _ = self.ctx.dev.device_wait_idle();
+            self.presenter.destroy(&self.ctx);
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct Renderer;
+
 impl Worker for Renderer {
+    type State = RendererState;
     type Init = RendererInit;
     type Msg = RendererMsg;
+
     type Tx = Producer<Self::Msg>;
     type Rx = Consumer<Self::Msg>;
 
@@ -46,7 +61,7 @@ impl Worker for Renderer {
         bounded(8192)
     }
 
-    fn new(init: RendererInit) -> anyhow::Result<Self> {
+    fn on_resume(&self, init: Self::Init) -> anyhow::Result<Self::State> {
         let ctx = init.ctx;
         let app_tx = init.app_tx;
         let extent = crate::util::extent_of(&init.win);
@@ -56,7 +71,7 @@ impl Worker for Renderer {
         let depth_prepass = DepthPrepass::new(&ctx, extent)?;
         let present_pass = PresentPass;
 
-        Ok(Self {
+        Ok(RendererState {
             presenter,
             clear_pass,
             depth_prepass,
@@ -66,56 +81,46 @@ impl Worker for Renderer {
         })
     }
 
-    fn tick(
-        &mut self,
-        elapsed: Duration,
-        dt: Duration,
+    fn on_tick(
+        this: &mut Self::State,
+        since_wake: Duration,
+        since_tick: Duration,
         tick: usize,
     ) -> anyhow::Result<()> {
-        let dt_f = dt.as_secs_f32();
+        let dt = since_tick.as_secs_f32();
 
-        self.app_tx.telemetry.send(RendererTelemetry { frame_time: dt_f });
+        this.app_tx.telemetry.send(RendererTelemetry { frame_time: dt });
 
-        let Some((target, cmd, resize)) = self.presenter.begin_frame(&self.ctx)? else {
+        let Some((target, cmd, resize)) = this.presenter.begin_frame(&this.ctx)? else {
             return Ok(()); // minimized or out-of-date, skip drawing
         };
 
         if resize {
-            self.clear_pass.resize(&self.ctx, target.extent)?;
-            self.present_pass.resize(&self.ctx, target.extent)?;
-            self.depth_prepass.resize(&self.ctx, target.extent)?;
+            this.clear_pass.resize(&this.ctx, target.extent)?;
+            this.present_pass.resize(&this.ctx, target.extent)?;
+            this.depth_prepass.resize(&this.ctx, target.extent)?;
         }
 
         let frame = FrameCtx {
             frame_idx: tick,
-            time: elapsed.as_secs_f64(),
-            dt: dt_f,
+            time: since_wake.as_secs_f64(),
+            dt,
             target,
-            swapchain_base_barrier: self.presenter.swapchain.base_barrier(),
+            swapchain_base_barrier: this.presenter.swapchain.base_barrier(),
         };
 
         unsafe {
-            self.clear_pass.execute(&self.ctx, &frame, cmd)?;
-            self.depth_prepass.execute(&self.ctx, &frame, cmd)?;
-            self.present_pass.execute(&self.ctx, &frame, cmd)?;
+            this.clear_pass.execute(&this.ctx, &frame, cmd)?;
+            this.depth_prepass.execute(&this.ctx, &frame, cmd)?;
+            this.present_pass.execute(&this.ctx, &frame, cmd)?;
         }
 
-        self.presenter.submit_frame(&self.ctx)
+        this.presenter.submit_frame(&this.ctx)
     }
 
-    fn handle(&mut self, msg: RendererMsg) {
+    fn on_msg(this: &mut Self::State, msg: RendererMsg) {
         match msg {
-            RendererMsg::Resized => self.presenter.resize_requested = true,
-        }
-    }
-}
-
-impl Drop for Renderer {
-    fn drop(&mut self) {
-        // ctx is dropped by the compiler after this is done
-        unsafe {
-            let _ = self.ctx.dev.device_wait_idle();
-            self.presenter.destroy(&self.ctx);
+            RendererMsg::Resized => this.presenter.resize_requested = true,
         }
     }
 }
