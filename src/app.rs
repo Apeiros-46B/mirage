@@ -1,7 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, time::{Duration, Instant}};
 
 use winit::{
-    application::ApplicationHandler, event::{DeviceEvent, DeviceId, StartCause, WindowEvent}, event_loop::{ActiveEventLoop, ControlFlow}, keyboard::{KeyCode, PhysicalKey}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}
+    application::ApplicationHandler, event::{DeviceEvent, DeviceId, ElementState, StartCause, WindowEvent}, event_loop::{ActiveEventLoop, ControlFlow}, keyboard::{KeyCode, PhysicalKey}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}
 };
 
 use crate::{
@@ -84,13 +84,13 @@ impl App {
 
 impl MessageHandler<GameTelemetry> for App {
     fn handle(&mut self, msg: GameTelemetry) {
-        dbg!(msg);
+        // dbg!(msg);
     }
 }
 
 impl MessageHandler<RendererTelemetry> for App {
     fn handle(&mut self, msg: RendererTelemetry) {
-        dbg!(msg);
+        // dbg!(msg);
     }
 }
 
@@ -179,11 +179,6 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event: k_evt, .. } => {
                 if consumed || k_evt.repeat {
                     return;
-                }
-                match k_evt.physical_key {
-                    PhysicalKey::Code(KeyCode::KeyI) => self.suspend_workers(),
-                    PhysicalKey::Code(KeyCode::KeyO) => self.resume_workers(win.clone()),
-                    _ => {}
                 }
                 self.game.tx.send(GameMsg::KeyPress(k_evt.physical_key, k_evt.state));
             }
