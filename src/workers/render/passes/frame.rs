@@ -1,12 +1,13 @@
 use ash::vk;
 
-use crate::{gpu::{ctx::VulkanCtx, pass::Task}, workers::render::present::RenderTarget};
+use crate::{gpu::{ctx::VulkanCtx, task::Task}, workers::render::present::RenderImage};
 
 pub struct FrameCtx {
+    pub frame_in_flight_idx: usize, // frame_idx % MAX_FRAMES_IN_FLIGHT
     pub frame_idx: usize,
     pub time: f64, // time since engine start
     pub dt: f32, // time since last frame
-    pub target: RenderTarget,
+    pub img: RenderImage,
     pub swapchain_base_barrier: vk::ImageMemoryBarrier2<'static>,
 }
 
@@ -33,7 +34,7 @@ impl Task<FrameCtx> for ClearPass {
             ctx.dev.cmd_pipeline_barrier2(cmd, &dep_info_color);
 
             let color_atmt = vk::RenderingAttachmentInfo::default()
-                .image_view(frame.target.view)
+                .image_view(frame.img.view)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .load_op(vk::AttachmentLoadOp::CLEAR)
                 .store_op(vk::AttachmentStoreOp::STORE)
@@ -46,7 +47,7 @@ impl Task<FrameCtx> for ClearPass {
             let rendering_info = vk::RenderingInfo::default()
                 .render_area(vk::Rect2D {
                     offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: frame.target.extent,
+                    extent: frame.img.extent,
                 })
                 .layer_count(1)
                 .color_attachments(std::slice::from_ref(&color_atmt));

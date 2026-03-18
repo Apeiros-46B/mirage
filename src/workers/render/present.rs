@@ -3,7 +3,7 @@ use winit::dpi::PhysicalSize;
 
 use crate::gpu::ctx::VulkanCtx;
 
-const FRAMES_IN_FLIGHT: usize = 2;
+pub const FRAMES_IN_FLIGHT: usize = 2;
 const SWAPCHAIN_MIN_IMGS: u32 = 3;
 const IMG_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
     aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -14,6 +14,13 @@ const IMG_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
 };
 
 // {{{ image and sync data
+pub struct RenderTarget {
+    pub img: RenderImage,
+    pub cmd: vk::CommandBuffer,
+    pub idx: usize,
+    pub did_resize: bool,
+}
+
 // we have FRAMES_IN_FLIGHT of these
 pub struct FrameData {
     pub cmd: vk::CommandBuffer,
@@ -31,7 +38,7 @@ impl FrameData {
 }
 
 // we have at least SWAPCHAIN_MIN_IMGS of these
-pub struct RenderTarget {
+pub struct RenderImage {
     pub img: vk::Image,
     pub view: vk::ImageView,
     pub extent: vk::Extent2D,
@@ -151,7 +158,7 @@ impl Swapchain {
     pub fn acquire(
         &mut self,
         to_signal: vk::Semaphore,
-    ) -> anyhow::Result<Option<RenderTarget>> {
+    ) -> anyhow::Result<Option<RenderImage>> {
         assert!(self.img_idx.is_none(), "acquire called twice without present");
 
         let result = unsafe {
@@ -171,7 +178,7 @@ impl Swapchain {
 
         self.img_idx = Some(idx);
         let img = &self.imgs[idx as usize];
-        Ok(Some(RenderTarget {
+        Ok(Some(RenderImage {
             img: img.img,
             view: img.view,
             extent: self.extent,
@@ -307,12 +314,14 @@ impl Swapchain {
 
 // {{{ presenter
 pub struct Presenter {
-    pub resize_requested: bool,
-    pub inner_surf_sz: (u32, u32),
     pub swapchain: Swapchain,
+
     frame_idx: usize,
     frames: [FrameData; FRAMES_IN_FLIGHT],
     cmd_pool: vk::CommandPool,
+
+    resize_requested: bool,
+    inner_surf_sz: (u32, u32),
 }
 
 impl Presenter {
@@ -335,8 +344,12 @@ impl Presenter {
 
         let frames = std::array::from_fn(|i| FrameData {
             cmd: cmd_bufs[i],
-            img_available_sem: unsafe { ctx.dev.create_semaphore(&sem_ci, None).unwrap() },
-            in_flight_fence: unsafe { ctx.dev.create_fence(&fence_ci, None).unwrap() },
+            img_available_sem: unsafe {
+                ctx.dev.create_semaphore(&sem_ci, None).unwrap()
+            },
+            in_flight_fence: unsafe {
+                ctx.dev.create_fence(&fence_ci, None).unwrap()
+            },
         });
 
         Ok(Self {
@@ -359,9 +372,10 @@ impl Presenter {
         }
     }
 
-    pub fn begin_frame(&mut self, ctx: &VulkanCtx)
-        -> anyhow::Result<Option<(RenderTarget, vk::CommandBuffer, bool)>>
-    {
+    pub fn begin_frame(
+        &mut self,
+        ctx: &VulkanCtx,
+    ) -> anyhow::Result<Option<RenderTarget>> {
         let mut did_resize = false;
         let frame = &self.frames[self.frame_idx];
 
@@ -379,7 +393,7 @@ impl Presenter {
             did_resize = true;
         }
 
-        let target = match self.swapchain.acquire(frame.img_available_sem)? {
+        let img = match self.swapchain.acquire(frame.img_available_sem)? {
             Some(t) => t,
             None => {
                 self.resize_requested = true;
@@ -389,14 +403,22 @@ impl Presenter {
 
         unsafe {
             ctx.dev.reset_fences(std::slice::from_ref(&frame.in_flight_fence))?;
-            ctx.dev.reset_command_buffer(frame.cmd, vk::CommandBufferResetFlags::empty())?;
+            ctx.dev.reset_command_buffer(
+                frame.cmd,
+                vk::CommandBufferResetFlags::empty(),
+            )?;
 
             let cmd_i = vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             ctx.dev.begin_command_buffer(frame.cmd, &cmd_i)?;
         }
 
-        Ok(Some((target, frame.cmd, did_resize)))
+        Ok(Some(RenderTarget {
+            did_resize,
+            idx: self.frame_idx,
+            cmd: frame.cmd,
+            img,
+        }))
     }
 
     pub fn submit_frame(&mut self, ctx: &VulkanCtx) -> anyhow::Result<()> {
@@ -437,6 +459,10 @@ impl Presenter {
     pub fn request_resize(&mut self, sz: PhysicalSize<u32>) {
         self.inner_surf_sz = sz.into();
         self.resize_requested = true;
+    }
+
+    pub fn is_minimized(&self) -> bool {
+        self.inner_surf_sz.0 == 0 || self.inner_surf_sz.1 == 0
     }
 }
 // }}}

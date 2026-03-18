@@ -1,7 +1,7 @@
 pub mod ctx;
 pub mod img;
-pub mod pass;
 pub mod surf;
+pub mod task;
 
 use anyhow::anyhow;
 use ash::vk;

@@ -77,9 +77,8 @@ impl<I> WorkerControl<I> {
 pub trait Worker: Sized + Default {
     type Init: Send + 'static;
 
-    // internal state created on resume and dropped on suspend.
-    // Worker owns and maintains Option<State>, the implementor
-    // only ever touches the raw State
+    // internal state created on resume and dropped on suspend. Worker owns and
+    // maintains Option<State>, the implementor only ever touches the raw State
     type State: Send + 'static + MessageHandler<<Self::Channels as WorkerRx<Self::State>>::Msg>;
 
     type Channels: WorkerRx<Self::State>;

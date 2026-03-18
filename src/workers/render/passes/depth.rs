@@ -1,9 +1,9 @@
 use ash::vk;
 
-use crate::gpu::{ctx::VulkanCtx, img::AllocatedImage, pass::Task};
+use crate::gpu::{ctx::VulkanCtx, img::AllocatedImage, task::Task};
 use super::frame::FrameCtx;
 
-const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/depth_prepass.spv"));
+const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/depth-prepass.spv"));
 
 const DEPTH_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
     aspect_mask: vk::ImageAspectFlags::DEPTH,
@@ -43,21 +43,21 @@ impl DepthPrepass {
             .offset(0)
             .size(72); // mat4 (64 bytes) + u64 world_bda (8 bytes)
 
-        let layout_ci = vk::PipelineLayoutCreateInfo::default()
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
             .push_constant_ranges(std::slice::from_ref(&push_range));
 
-        let layout = unsafe { ctx.dev.create_pipeline_layout(&layout_ci, None)? };
+        let layout = unsafe { ctx.dev.create_pipeline_layout(&layout_info, None)? };
 
         let vert_stage_ci = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
             .module(module)
-            .name(c"vertMain");
+            .name(c"vsh");
         // need a dummy fragment shader on some platforms
         // if one is not provided, app crashes on windows
         let frag_stage_ci = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
             .module(module)
-            .name(c"fragMain");
+            .name(c"fsh");
         let stages = [vert_stage_ci, frag_stage_ci];
 
         // empty, use gl_VertexIndex
@@ -154,8 +154,8 @@ impl Task<FrameCtx> for DepthPrepass {
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
             .src_stage_mask(vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS)
-            .src_access_mask(vk::AccessFlags2::NONE)
             .dst_stage_mask(vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS)
+            .src_access_mask(vk::AccessFlags2::NONE)
             .dst_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE);
 
         let dep = vk::DependencyInfo::default()
@@ -176,7 +176,7 @@ impl Task<FrameCtx> for DepthPrepass {
         let rendering_info = vk::RenderingInfo::default()
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent: frame.target.extent,
+                extent: frame.img.extent,
             })
             .layer_count(1)
             .depth_attachment(&depth_attachment);

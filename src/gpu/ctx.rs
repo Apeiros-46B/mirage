@@ -1,3 +1,4 @@
+// TODO: replace _ci, _ai naming convention everywhere with _info
 use std::{ffi::c_char, mem::ManuallyDrop, sync::{Arc, Mutex}};
 
 use ash::vk;

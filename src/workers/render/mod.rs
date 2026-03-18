@@ -5,7 +5,7 @@ use ash::vk;
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    gpu::{ctx::VulkanCtx, pass::Task},
+    gpu::{ctx::VulkanCtx, task::Task},
     sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
 };
 use super::msgs::{
@@ -16,7 +16,11 @@ use super::msgs::{
     RendererTelemetry,
     RendererToApp,
 };
-use passes::{depth::DepthPrepass, egui::EguiPass, frame::{ClearPass, FrameCtx, PresentPass}};
+use passes::{
+    depth::DepthPrepass,
+    egui::EguiPass,
+    frame::{ClearPass, FrameCtx, PresentPass},
+};
 use present::Presenter;
 
 pub struct RendererState {
@@ -58,7 +62,7 @@ impl Worker for Renderer {
         let clear_pass = ClearPass;
         let depth_prepass = DepthPrepass::new(&ctx, extent)?;
         let present_pass = PresentPass;
-        let egui_pass = Default::default();
+        let egui_pass = EguiPass::new(&ctx, presenter.swapchain.fmt)?;
 
         Ok(RendererState {
             presenter,
@@ -81,32 +85,35 @@ impl Worker for Renderer {
 
         this.app_tx.telemetry.send(RendererTelemetry { frame_time: dt });
 
-        let Some((target, cmd, resize)) = this.presenter.begin_frame(&this.ctx)? else {
-            if this.presenter.inner_surf_sz.0 == 0 || this.presenter.inner_surf_sz.1 == 0 {
-                // the window is minimized, sleep to avoid busy wait
+        let Some(target) = this.presenter.begin_frame(&this.ctx)? else {
+            if this.presenter.is_minimized() {
+                // sleep to avoid busy wait
                 std::thread::sleep(Duration::from_millis(50));
             }
             return Ok(());
         };
 
-        if resize {
-            this.clear_pass.resize(&this.ctx, target.extent)?;
-            this.present_pass.resize(&this.ctx, target.extent)?;
-            this.depth_prepass.resize(&this.ctx, target.extent)?;
+        if target.did_resize {
+            this.clear_pass.resize(&this.ctx, target.img.extent)?;
+            this.present_pass.resize(&this.ctx, target.img.extent)?;
+            this.depth_prepass.resize(&this.ctx, target.img.extent)?;
+            this.egui_pass.resize(&this.ctx, target.img.extent)?;
         }
 
         let frame = FrameCtx {
+            frame_in_flight_idx: target.idx,
             frame_idx: tick,
             time: since_wake.as_secs_f64(),
             dt,
-            target,
+            img: target.img,
             swapchain_base_barrier: this.presenter.swapchain.base_barrier(),
         };
 
         unsafe {
-            this.clear_pass.execute(&this.ctx, &frame, cmd)?;
-            this.depth_prepass.execute(&this.ctx, &frame, cmd)?;
-            this.present_pass.execute(&this.ctx, &frame, cmd)?;
+            this.clear_pass.execute(&this.ctx, &frame, target.cmd)?;
+            this.depth_prepass.execute(&this.ctx, &frame, target.cmd)?;
+            this.present_pass.execute(&this.ctx, &frame, target.cmd)?;
+            this.egui_pass.execute(&this.ctx, &frame, target.cmd)?;
         }
 
         this.presenter.submit_frame(&this.ctx)

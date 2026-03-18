@@ -1,13 +1,13 @@
 struct PushConstants {
 	float4x4 viewProj;
-	uint64_t world_bda;
+	uint64_t worldBda;
 };
 
 [[vk::push_constant]]
 ConstantBuffer<PushConstants> push;
 
 [shader("vertex")]
-float4 vertMain(uint vertexID : SV_VertexID) : SV_Position {
+float4 vsh(uint vertexID : SV_VertexID) : SV_Position {
 	const float3 CORNERS[8] = {
 		float3(0, 0, 0), float3(1, 0, 0), float3(1, 1, 0), float3(0, 1, 0),
 		float3(0, 0, 1), float3(1, 0, 1), float3(1, 1, 1), float3(0, 1, 1)
@@ -23,13 +23,13 @@ float4 vertMain(uint vertexID : SV_VertexID) : SV_Position {
 		4, 0, 3, 4, 3, 7  // left (-X)
 	};
 
-	float3 local_pos = CORNERS[INDICES[vertexID]];
-	local_pos *= 256.0; // chunk scale
+	float3 localPos = CORNERS[INDICES[vertexID]];
+	localPos *= 256.0; // chunk scale
 
 	// do real world position later
-	float3 world_pos = local_pos + float3(0.0, 0.0, 0.0);
-	return mul(push.viewProj, float4(world_pos, 1.0));
+	float3 worldPos = localPos + float3(0.0, 0.0, 0.0);
+	return mul(push.viewProj, float4(worldPos, 1.0));
 }
 
 [shader("fragment")]
-void fragMain() {}
+void fsh() {}
