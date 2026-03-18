@@ -1,11 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use winit::{
-    application::ApplicationHandler,
-    event::{DeviceEvent, DeviceId, StartCause, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow},
-    raw_window_handle::{HasDisplayHandle, HasWindowHandle},
-    window::{Window, WindowAttributes, WindowId},
+    application::ApplicationHandler, event::{DeviceEvent, DeviceId, StartCause, WindowEvent}, event_loop::{ActiveEventLoop, ControlFlow}, keyboard::{KeyCode, PhysicalKey}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}
 };
 
 use crate::{
@@ -37,8 +33,7 @@ pub struct App {
     egui_state: Option<egui_winit::State>,
     win: Option<Arc<Window>>,
 
-    aux_tx: Option<AppTxBundle>,
-    aux_rx: Option<AppRxBundle>,
+    rx: Option<AppRxBundle>,
     game: WorkerHandle<Game>,
     renderer: WorkerHandle<Renderer>,
 }
@@ -47,30 +42,55 @@ impl App {
     pub fn new() -> Self {
         let egui_ctx = egui::Context::default();
 
-        let (aux_tx, aux_rx) = AppTxBundle::new_pair();
-
         Self {
             initialised: false,
             egui_ctx,
             egui_state: None,
             win: None,
-            aux_tx: Some(aux_tx),
-            aux_rx: Some(aux_rx),
+            rx: None,
             game: Game::spawn(),
             renderer: Renderer::spawn(),
         }
+    }
+
+    fn resume_workers(&mut self, win: Arc<Window>) {
+        let ctx = VulkanCtx::new(
+                win.display_handle().expect("failed to get display").as_raw(),
+                win.window_handle().expect("failed to get window").as_raw(),
+                win.clone(),
+            )
+            .expect("failed to init Vulkan");
+
+        let (mut tx, rx) = AppTxBundle::new_pair();
+        self.rx = Some(rx);
+
+        self.renderer.resume(RendererInit {
+            ctx: Arc::new(ctx),
+            win: win.clone(),
+            app_tx: tx.take_renderer().unwrap(),
+        });
+
+        self.game.resume(GameInit {
+            win,
+            app_tx: tx.take_game().unwrap(),
+        });
+    }
+
+    fn suspend_workers(&mut self) {
+        self.renderer.suspend();
+        self.game.suspend();
     }
 }
 
 impl MessageHandler<GameTelemetry> for App {
     fn handle(&mut self, msg: GameTelemetry) {
-        // dbg!(msg);
+        dbg!(msg);
     }
 }
 
 impl MessageHandler<RendererTelemetry> for App {
     fn handle(&mut self, msg: RendererTelemetry) {
-        // dbg!(msg);
+        dbg!(msg);
     }
 }
 
@@ -95,32 +115,14 @@ impl ApplicationHandler for App {
             None,
         ));
 
-        let ctx = VulkanCtx::new(
-                win.display_handle().expect("failed to get display").as_raw(),
-                win.window_handle().expect("failed to get window").as_raw(),
-                win.clone(),
-            )
-            .expect("failed to init Vulkan");
-
-        let mut aux_tx = self.aux_tx.take().expect("failed to get aux_tx");
-
-        self.renderer.resume(RendererInit {
-            ctx: Arc::new(ctx),
-            win: win.clone(),
-            app_tx: aux_tx.take_renderer().unwrap(),
-        });
-
-        self.game.resume(GameInit {
-            win,
-            app_tx: aux_tx.take_game().unwrap(),
-        });
+        self.resume_workers(win);
     }
 
     fn about_to_wait(&mut self, evt_loop: &ActiveEventLoop) {
         // handle incoming messages
-        if let Some(mut aux_rx) = self.aux_rx.take() {
-            aux_rx.drain_all(self);
-            self.aux_rx = Some(aux_rx);
+        if let Some(mut rx) = self.rx.take() {
+            rx.drain_all(self);
+            self.rx = Some(rx);
         }
 
         // ~60Hz
@@ -177,6 +179,11 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event: k_evt, .. } => {
                 if consumed || k_evt.repeat {
                     return;
+                }
+                match k_evt.physical_key {
+                    PhysicalKey::Code(KeyCode::KeyI) => self.suspend_workers(),
+                    PhysicalKey::Code(KeyCode::KeyO) => self.resume_workers(win.clone()),
+                    _ => {}
                 }
                 self.game.tx.send(GameMsg::KeyPress(k_evt.physical_key, k_evt.state));
             }
