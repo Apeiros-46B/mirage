@@ -11,13 +11,22 @@ use winit::{
 use crate::{
     gpu::ctx::VulkanCtx,
     sync::{
-        chan::{MessageHandler, RxBundle, SafeSend, TxBundle},
-        worker::{WorkerExt, WorkerHandle},
+        chan::SafeSend,
+        worker::{MessageHandler, WorkerExt, WorkerHandle},
     },
     workers::{
-        game::{Game, GameInit, GameMsg},
-        msgs::{AppRxBundle, AppTxBundle, GameTelemetry, RendererTelemetry},
-        render::{Renderer, RendererInit, RendererMsg},
+        game::Game,
+        msgs::{
+            AppRxBundle,
+            AppTxBundle,
+            GameInit,
+            GameMsg,
+            GameTelemetry,
+            RendererInit,
+            RendererMsg,
+            RendererTelemetry,
+        },
+        render::Renderer,
     },
 };
 
@@ -38,7 +47,7 @@ impl App {
     pub fn new() -> Self {
         let egui_ctx = egui::Context::default();
 
-        let (aux_tx, aux_rx) = TxBundle::<App>::new();
+        let (aux_tx, aux_rx) = AppTxBundle::new_pair();
 
         Self {
             initialised: false,
@@ -55,13 +64,13 @@ impl App {
 
 impl MessageHandler<GameTelemetry> for App {
     fn handle(&mut self, msg: GameTelemetry) {
-        dbg!(msg);
+        // dbg!(msg);
     }
 }
 
 impl MessageHandler<RendererTelemetry> for App {
     fn handle(&mut self, msg: RendererTelemetry) {
-        dbg!(msg);
+        // dbg!(msg);
     }
 }
 

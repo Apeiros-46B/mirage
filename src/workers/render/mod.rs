@@ -3,26 +3,19 @@ mod present;
 
 use std::{sync::Arc, time::Duration};
 
-use rtrb::{Consumer, Producer};
-use winit::window::Window;
-
 use crate::{
     gpu::{ctx::VulkanCtx, pass::Task},
-    sync::{chan::{SafeSend, bounded}, worker::Worker},
+    sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
 };
-use super::msgs::{RendererTelemetry, RendererToApp};
+use super::msgs::{
+    RendererInit,
+    RendererMsg,
+    RendererRxBundle,
+    RendererTelemetry,
+    RendererToApp,
+};
 use passes::{depth::DepthPrepass, frame::{ClearPass, FrameCtx, PresentPass}};
 use present::Presenter;
-
-pub struct RendererInit {
-    pub ctx: Arc<VulkanCtx>,
-    pub win: Arc<Window>,
-    pub app_tx: RendererToApp,
-}
-
-pub enum RendererMsg {
-    Resized,
-}
 
 pub struct RendererState {
     presenter: Presenter,
@@ -49,17 +42,7 @@ pub struct Renderer;
 impl Worker for Renderer {
     type State = RendererState;
     type Init = RendererInit;
-    type Msg = RendererMsg;
-
-    type Tx = Producer<Self::Msg>;
-    type Rx = Consumer<Self::Msg>;
-
-    type AuxTx = ();
-    type AuxRx = ();
-
-    fn channel() -> (Self::Tx, Self::Rx) {
-        bounded(8192)
-    }
+    type Channels = RendererRxBundle;
 
     fn on_resume(&self, init: Self::Init) -> anyhow::Result<Self::State> {
         let ctx = init.ctx;
@@ -117,10 +100,12 @@ impl Worker for Renderer {
 
         this.presenter.submit_frame(&this.ctx)
     }
+}
 
-    fn on_msg(this: &mut Self::State, msg: RendererMsg) {
+impl MessageHandler<RendererMsg> for RendererState {
+    fn handle(&mut self, msg: RendererMsg) {
         match msg {
-            RendererMsg::Resized => this.presenter.resize_requested = true,
+            RendererMsg::Resized => self.presenter.resize_requested = true,
         }
     }
 }

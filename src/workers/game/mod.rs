@@ -3,31 +3,19 @@ pub mod input;
 
 use std::{sync::Arc, time::Duration};
 
-use winit::{event::{ElementState, MouseButton}, keyboard::PhysicalKey, window::Window};
+use winit::window::Window;
 
 use crate::sync::{
-    chan::{ConsumerBlocking, ProducerBlocking, SafeSend, bounded_deadline},
-    worker::{Worker, WorkerControl, WorkerExt},
+    chan::SafeSend,
+    worker::{MessageHandler, Worker, WorkerControl, WorkerExt},
 };
-use super::msgs::{GameTelemetry, GameToApp};
+use super::msgs::{GameInit, GameMsg, GameRxBundle, GameTelemetry, GameToApp};
 use camera::Camera;
 use input::InputState;
 
 pub trait Polled {
     fn poll(&mut self, _input: &mut InputState, _dt: f32) {}
     fn poll_post(&mut self) {}
-}
-
-pub struct GameInit {
-    pub win: Arc<Window>,
-    pub app_tx: GameToApp,
-}
-
-pub enum GameMsg {
-    Resized,
-    KeyPress(PhysicalKey, ElementState),
-    MouseClick(MouseButton, ElementState),
-    MouseMotion(f32, f32),
 }
 
 pub struct GameState {
@@ -43,17 +31,7 @@ pub struct Game;
 impl Worker for Game {
     type State = GameState;
     type Init = GameInit;
-    type Msg = GameMsg;
-
-    type Tx = ProducerBlocking<Self::Msg>;
-    type Rx = ConsumerBlocking<Self::Msg>;
-
-    type AuxTx = ();
-    type AuxRx = ();
-
-    fn channel() -> (Self::Tx, Self::Rx) {
-        bounded_deadline(8192)
-    }
+    type Channels = GameRxBundle;
 
     fn on_resume(&self, init: Self::Init) -> anyhow::Result<Self::State> {
         Ok(GameState {
@@ -80,25 +58,26 @@ impl Worker for Game {
         Ok(())
     }
 
-    fn on_msg(this: &mut Self::State, msg: Self::Msg) {
-        match msg {
-            GameMsg::KeyPress(key, state) => this.input.handle_input(key, state),
-            GameMsg::MouseClick(btn, state) => this.input.handle_input(btn, state),
-            GameMsg::MouseMotion(dx, dy) => {
-                this.input.handle_mouse(dx, dy);
-                this.camera.poll(&mut this.input, 0.0);
-                // ^ 0.0 dt to apply mouse movements only
-            },
-            GameMsg::Resized => this.camera.resize(this.win.inner_size()),
-        }
-    }
-
     fn run(
         self,
         ctrl: Arc<WorkerControl<Self::Init>>,
-        rx: Self::Rx,
-        aux_rx: Self::AuxRx,
+        rx: Self::Channels,
     ) {
-        self.run_tickrate(ctrl, rx, aux_rx, 120.0);
+        self.run_tickrate(ctrl, rx, 120.0);
+    }
+}
+
+impl MessageHandler<GameMsg> for GameState {
+    fn handle(&mut self, msg: GameMsg) {
+        match msg {
+            GameMsg::KeyPress(key, state) => self.input.handle_input(key, state),
+            GameMsg::MouseClick(btn, state) => self.input.handle_input(btn, state),
+            GameMsg::MouseMotion(dx, dy) => {
+                self.input.handle_mouse(dx, dy);
+                self.camera.poll(&mut self.input, 0.0);
+                // ^ 0.0 dt to apply mouse movements only
+            },
+            GameMsg::Resized => self.camera.resize(self.win.inner_size()),
+        }
     }
 }
