@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, time::{Duration, Instant}};
 
 use winit::{
     application::ApplicationHandler,
@@ -11,7 +11,7 @@ use winit::{
 use crate::{
     gpu::ctx::VulkanCtx,
     sync::{
-        chan::{SafeSend, SafeSendOpt},
+        chan::SafeSend,
         worker::{MessageHandler, WorkerExt, WorkerHandle},
     },
     workers::{
@@ -37,6 +37,8 @@ pub struct App {
     egui_ctx: egui::Context,
     egui_state: Option<egui_winit::State>,
     egui_pending_textures: egui::TexturesDelta,
+    next_redraw: Instant,
+
     win: Option<Arc<Window>>,
 
     rx: Option<AppRxBundle>,
@@ -50,10 +52,14 @@ impl App {
 
         Self {
             initialised: false,
+
             egui_ctx,
             egui_state: None,
             egui_pending_textures: Default::default(),
+            next_redraw: Instant::now(),
+
             win: None,
+
             rx: None,
             game: Game::spawn(),
             renderer: Renderer::spawn(),
@@ -102,8 +108,8 @@ impl App {
         let raw_input = egui_state.take_egui_input(win);
 
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
-            egui::Window::new("Engine Debug").show(ctx, |ui| {
-                ui.label(format!("Frames drawn..."));
+            egui::Window::new("Debug").show(ctx, |ui| {
+                ui.label("Hello world!");
                 if ui.button("Quit").clicked() {
                     evt_loop.exit();
                 }
@@ -177,22 +183,16 @@ impl ApplicationHandler for App {
             self.rx = Some(rx);
         }
 
-        // ~60Hz
-        let dur = Duration::from_secs_f64(1.0 / 60.0);
-        evt_loop.set_control_flow(ControlFlow::wait_duration(dur));
-    }
-
-    fn new_events(
-        &mut self,
-        _evt_loop: &ActiveEventLoop,
-        cause: StartCause,
-    ) {
-        // redraw every time we wake up due to sleep timeout
-        if let StartCause::ResumeTimeReached { .. } = cause {
+        let now = Instant::now();
+        if now >= self.next_redraw {
             if let Some(win) = self.win.as_ref() {
                 win.request_redraw();
             }
+            // 60Hz
+            self.next_redraw = now + Duration::from_secs_f64(1.0 / 60.0);
         }
+
+        evt_loop.set_control_flow(ControlFlow::WaitUntil(self.next_redraw));
     }
 
     fn window_event(
@@ -209,10 +209,6 @@ impl ApplicationHandler for App {
         if let Some(egui_state) = &mut self.egui_state {
             let res = egui_state.on_window_event(win, &evt);
             consumed = res.consumed;
-
-            if res.repaint {
-                win.request_redraw();
-            }
         }
 
         match evt {

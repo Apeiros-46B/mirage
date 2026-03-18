@@ -9,7 +9,7 @@ use gpu_allocator::{
 use winit::dpi::PhysicalSize;
 
 use crate::{
-    gpu::{ctx::VulkanCtx, img::AllocatedImage, task::Task},
+    gpu::{ctx::VulkanCtx, img::AllocatedImage, sync::ImageBarrierExt, task::Task},
     workers::{msgs::EguiUpdate, render::present::FRAMES_IN_FLIGHT},
 };
 use super::frame::FrameCtx;
@@ -45,7 +45,6 @@ pub struct EguiPass {
     pending_frees: [Vec<AllocatedImage>; FRAMES_IN_FLIGHT],
 
     geom_buf: vk::Buffer,
-    geom_mem: Option<Allocation>,
     geom_ptr: MappedBuffer,
 }
 
@@ -129,7 +128,7 @@ impl EguiPass {
         // }}}
 
         // {{{ blending (egui uses premultiplied alpha)
-        let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
+        let blend_atmt = vk::PipelineColorBlendAttachmentState::default()
             .blend_enable(true)
             .src_color_blend_factor(vk::BlendFactor::ONE)
             .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
@@ -140,7 +139,7 @@ impl EguiPass {
             .color_write_mask(vk::ColorComponentFlags::RGBA);
 
         let blend_info = vk::PipelineColorBlendStateCreateInfo::default()
-            .attachments(std::slice::from_ref(&blend_attachment));
+            .attachments(std::slice::from_ref(&blend_atmt));
         // }}}
 
         // {{{ pipeline creation
@@ -249,7 +248,6 @@ impl EguiPass {
             pending_frees: std::array::from_fn(|_| Vec::new()),
 
             geom_buf,
-            geom_mem: Some(geom_mem),
             geom_ptr: MappedBuffer(geom_ptr),
         })
     }
@@ -299,130 +297,162 @@ impl Task<FrameCtx> for EguiPass {
                 ),
             };
 
-            let extent = vk::Extent3D { width, height, depth: 1 };
-            let subres_range = vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR).level_count(1).layer_count(1);
-
-            let img = AllocatedImage::new(
-                ctx, extent, vk::Format::R8G8B8A8_UNORM,
-                vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-                subres_range,
-                "egui_tex",
-            )?;
-            // }}}
-
-            // {{{ copy to staging buf
-            let staging_size = pixels.len() as u64;
-            let staging_ci = vk::BufferCreateInfo::default()
-                .size(staging_size)
+            let staging_sz = pixels.len() as u64;
+            let staging_info = vk::BufferCreateInfo::default()
+                .size(staging_sz)
                 .usage(vk::BufferUsageFlags::TRANSFER_SRC);
-            let staging_buf = unsafe { ctx.dev.create_buffer(&staging_ci, None)? };
+
+            // TODO: use transient allocator to hand out slices instead of this
+            let staging_buf = unsafe { ctx.dev.create_buffer(&staging_info, None)? };
 
             let reqs = unsafe { ctx.dev.get_buffer_memory_requirements(staging_buf) };
-            let staging_mem = ctx.alloc.lock().unwrap().allocate(&AllocationCreateDesc {
-                name: "egui_staging",
-                requirements: reqs,
-                location: MemoryLocation::CpuToGpu,
-                linear: true,
-                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-            })?;
+            let staging_mem = ctx.alloc.lock().unwrap().allocate(
+                &AllocationCreateDesc {
+                    name: "egui_staging",
+                    requirements: reqs,
+                    location: MemoryLocation::CpuToGpu,
+                    linear: true,
+                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                }
+            )?;
+
             unsafe {
                 ctx.dev.bind_buffer_memory(
                     staging_buf,
                     staging_mem.memory(),
                     staging_mem.offset(),
-                )?
-            };
-
-            let ptr = staging_mem.mapped_ptr().unwrap().as_ptr() as *mut u8;
-            unsafe {
-                std::ptr::copy_nonoverlapping(pixels.as_ptr(), ptr, pixels.len());
+                )?;
+                std::ptr::copy_nonoverlapping(
+                    pixels.as_ptr(),
+                    staging_mem.mapped_ptr().unwrap().as_ptr() as *mut u8,
+                    pixels.len(),
+                );
             }
 
             self.pending_staging[fif].push((staging_buf, staging_mem));
-            // }}}
 
-            // {{{ copy staging buf to img
-            let barrier = vk::ImageMemoryBarrier2::default()
-                .image(img.img)
-                .subresource_range(subres_range)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
-                .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .src_access_mask(vk::AccessFlags2::NONE)
-                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
+            let extent = vk::Extent3D { width, height, depth: 1 };
+            let subres_range = vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .level_count(1)
+                .layer_count(1);
 
-            let dep_info = vk::DependencyInfo::default()
-                .image_memory_barriers(std::slice::from_ref(&barrier));
-
-            unsafe {
-                ctx.dev.cmd_pipeline_barrier2(cmd, &dep_info);
-            }
-
-            let region = vk::BufferImageCopy::default()
+            let copy_region = vk::BufferImageCopy::default()
                 .image_subresource(vk::ImageSubresourceLayers {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     mip_level: 0,
                     base_array_layer: 0,
                     layer_count: 1,
                 })
+                .image_offset(
+                    if let Some(pos) = delta.pos {
+                        vk::Offset3D { x: pos[0] as i32, y: pos[1] as i32, z: 0 }
+                    } else {
+                        vk::Offset3D { x: 0, y: 0, z: 0 }
+                    },
+                )
                 .image_extent(extent);
 
-            unsafe {
-                ctx.dev.cmd_copy_buffer_to_image(
-                    cmd,
-                    staging_buf,
-                    img.img,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    std::slice::from_ref(&region),
+            if let Some(_pos) = delta.pos {
+                // {{{ update to existing image
+                let (img, _) = self.textures.get(&id)
+                    .expect("egui requested update for non-existent texture");
+
+                let mut barrier = vk::ImageMemoryBarrier2::default()
+                    .image(img.img)
+                    .subresource_range(subres_range)
+                    .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .src_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                    .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                    .src_access_mask(vk::AccessFlags2::SHADER_READ)
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
+
+                unsafe {
+                    ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info());
+
+                    ctx.dev.cmd_copy_buffer_to_image(
+                        cmd,
+                        staging_buf,
+                        img.img,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        std::slice::from_ref(&copy_region),
+                    );
+                }
+
+                barrier = barrier.next_phase(
+                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                    vk::AccessFlags2::SHADER_READ,
                 );
+
+                unsafe {
+                    ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info());
+                }
+                // }}}
+            } else {
+                // {{{ new image
+                let img = AllocatedImage::new(
+                    ctx,
+                    extent,
+                    vk::Format::R8G8B8A8_UNORM,
+                    vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+                    subres_range,
+                    "egui_tex",
+                )?;
+
+                let mut barrier = vk::ImageMemoryBarrier2::default()
+                    .image(img.img)
+                    .subresource_range(subres_range)
+                    .old_layout(vk::ImageLayout::UNDEFINED)
+                    .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                    .src_access_mask(vk::AccessFlags2::NONE)
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
+
+                unsafe {
+                    ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info());
+                    ctx.dev.cmd_copy_buffer_to_image(
+                        cmd,
+                        staging_buf,
+                        img.img,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        std::slice::from_ref(&copy_region),
+                    );
+                }
+
+                barrier = barrier.next_phase(
+                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                    vk::AccessFlags2::SHADER_READ,
+                );
+
+                unsafe {
+                    ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info());
+                }
+
+                let desc_set_info = vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(self.desc_pool)
+                    .set_layouts(std::slice::from_ref(&self.desc_set_layout));
+                let set = unsafe { ctx.dev.allocate_descriptor_sets(&desc_set_info)?[0] };
+
+                let img_info = vk::DescriptorImageInfo::default()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(img.view)
+                    .sampler(self.sampler);
+
+                let write = vk::WriteDescriptorSet::default()
+                    .dst_set(set).dst_binding(0).descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&img_info));
+
+                unsafe { ctx.dev.update_descriptor_sets(std::slice::from_ref(&write), &[]); }
+
+                self.textures.insert(id, (img, set));
+                // }}}
             }
+
             // }}}
-
-            // {{{ point desc set to img
-            let barrier = vk::ImageMemoryBarrier2::default()
-                .image(img.img)
-                .subresource_range(subres_range)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags2::SHADER_READ);
-
-            let dep_info = vk::DependencyInfo::default()
-                .image_memory_barriers(std::slice::from_ref(&barrier));
-
-            unsafe {
-                ctx.dev.cmd_pipeline_barrier2(cmd, &dep_info);
-            }
-
-            let desc_set_info = vk::DescriptorSetAllocateInfo::default()
-                .descriptor_pool(self.desc_pool)
-                .set_layouts(std::slice::from_ref(&self.desc_set_layout));
-            let set = unsafe { ctx.dev.allocate_descriptor_sets(&desc_set_info)?[0] };
-
-            let img_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(img.view)
-                .sampler(self.sampler);
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(&img_info));
-
-            unsafe {
-                ctx.dev.update_descriptor_sets(std::slice::from_ref(&write), &[]);
-            }
-            // }}}
-
-            self.textures.insert(id, (img, set));
         }
 
         if self.primitives.is_empty() {
@@ -464,7 +494,7 @@ impl Task<FrameCtx> for EguiPass {
         // }}}
 
         // render to swapchain image
-        let color_attachment = vk::RenderingAttachmentInfo::default()
+        let color_atmt = vk::RenderingAttachmentInfo::default()
             .image_view(args.img.view)
             .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
             .load_op(vk::AttachmentLoadOp::LOAD) // blend with earlier content
@@ -476,7 +506,7 @@ impl Task<FrameCtx> for EguiPass {
                 extent: args.img.extent,
             })
             .layer_count(1)
-            .color_attachments(std::slice::from_ref(&color_attachment));
+            .color_attachments(std::slice::from_ref(&color_atmt));
 
         unsafe { ctx.dev.cmd_begin_rendering(cmd, &rendering_info); }
 

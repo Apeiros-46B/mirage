@@ -164,7 +164,7 @@ impl Task<FrameCtx> for DepthPrepass {
         unsafe { ctx.dev.cmd_pipeline_barrier2(cmd, &dep) };
 
         // render depth only, cleared to 1.0
-        let depth_attachment = vk::RenderingAttachmentInfo::default()
+        let depth_atmt = vk::RenderingAttachmentInfo::default()
             .image_view(self.depth_target.view)
             .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
             .load_op(vk::AttachmentLoadOp::CLEAR)
@@ -179,7 +179,7 @@ impl Task<FrameCtx> for DepthPrepass {
                 extent: frame.img.extent,
             })
             .layer_count(1)
-            .depth_attachment(&depth_attachment);
+            .depth_attachment(&depth_atmt);
 
         unsafe {
             ctx.dev.cmd_begin_rendering(cmd, &rendering_info);

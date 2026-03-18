@@ -1,6 +1,6 @@
 use ash::vk;
 
-use crate::{gpu::{ctx::VulkanCtx, task::Task}, workers::render::present::RenderImage};
+use crate::{gpu::{ctx::VulkanCtx, sync::ImageBarrierExt, task::Task}, workers::render::present::RenderImage};
 
 pub struct FrameCtx {
     pub frame_in_flight_idx: usize, // frame_idx % MAX_FRAMES_IN_FLIGHT
@@ -21,7 +21,7 @@ impl Task<FrameCtx> for ClearPass {
         cmd: vk::CommandBuffer,
     ) -> anyhow::Result<()> {
         unsafe {
-            let to_color_barrier = frame.swapchain_base_barrier
+            let barrier = frame.swapchain_base_barrier
                 .old_layout(vk::ImageLayout::UNDEFINED)
                 .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
@@ -29,9 +29,7 @@ impl Task<FrameCtx> for ClearPass {
                 .src_access_mask(vk::AccessFlags2::empty())
                 .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE);
 
-            let dep_info_color = vk::DependencyInfo::default()
-                .image_memory_barriers(std::slice::from_ref(&to_color_barrier));
-            ctx.dev.cmd_pipeline_barrier2(cmd, &dep_info_color);
+            ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info());
 
             let color_atmt = vk::RenderingAttachmentInfo::default()
                 .image_view(frame.img.view)

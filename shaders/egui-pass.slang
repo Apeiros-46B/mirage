@@ -42,6 +42,7 @@ VertexOutput vsh(VertexInput vi) {
 
 [shader("fragment")]
 float4 fsh(VertexOutput vo) : SV_Target {
-	// egui vert colors are premultiplied
-	return vo.color * sampler.Sample(vo.uv);
+	float4 color = vo.color * sampler.Sample(vo.uv);
+	float3 srgb = pow(color.rgb, float3(2.2)); // linear -> sRGB, don't touch alpha
+	return float4(srgb, color.a);
 }

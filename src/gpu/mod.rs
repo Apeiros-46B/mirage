@@ -1,6 +1,7 @@
 pub mod ctx;
 pub mod img;
 pub mod surf;
+pub mod sync;
 pub mod task;
 
 use anyhow::anyhow;
