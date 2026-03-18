@@ -1,8 +1,6 @@
-pub mod depth;
-
 use ash::vk;
 
-use crate::{gpu::{ctx::VulkanCtx, pass::Task}, render::present::RenderTarget};
+use crate::{gpu::{ctx::VulkanCtx, pass::Task}, workers::render::present::RenderTarget};
 
 pub struct FrameCtx {
     pub frame_idx: usize,

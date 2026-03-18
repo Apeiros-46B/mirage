@@ -1,6 +1,7 @@
 use ash::vk;
 
-use crate::{gpu::{ctx::VulkanCtx, img::AllocatedImage, pass::Task}, render::passes::FrameCtx};
+use crate::gpu::{ctx::VulkanCtx, img::AllocatedImage, pass::Task};
+use super::frame::FrameCtx;
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/depth_prepass.spv"));
 

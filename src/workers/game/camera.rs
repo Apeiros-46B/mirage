@@ -1,7 +1,7 @@
 use glam::{Mat4, Vec2, Vec3};
 use winit::dpi::PhysicalSize;
 
-use crate::game::{Polled, input::{InputBtn, InputState}};
+use super::{Polled, input::{InputBtn, InputState}};
 
 #[derive(Clone, Debug)]
 pub struct Camera {

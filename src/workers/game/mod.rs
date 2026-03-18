@@ -5,15 +5,13 @@ use std::{sync::{Arc, atomic::AtomicBool}, time::Duration};
 
 use winit::{event::{ElementState, MouseButton}, keyboard::PhysicalKey, window::Window};
 
-use crate::{
-    app::GameToApp,
-    debug::GameTelemetry,
-    game::{camera::Camera, input::InputState},
-    sync::{
-        chan::{ConsumerBlocking, ProducerBlocking, SafeSend, bounded_deadline},
-        worker::{Worker, WorkerExt},
-    }
+use crate::sync::{
+    chan::{ConsumerBlocking, ProducerBlocking, SafeSend, bounded_deadline},
+    worker::{Worker, WorkerExt},
 };
+use super::msgs::{GameTelemetry, GameToApp};
+use camera::Camera;
+use input::InputState;
 
 pub trait Polled {
     fn poll(&mut self, _input: &mut InputState, _dt: f32) {}

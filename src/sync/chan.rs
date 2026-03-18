@@ -247,14 +247,18 @@ impl<T, Q: SafeSend<T>> SafeSendOpt<T> for Option<Q> {
 }
 // }}}
 
-// {{{ declarative configuration of collections of ringbufs
+// {{{ declarative configuration of multi-lane message passing
+pub trait MessageHandler<T> {
+    fn handle(&mut self, msg: T);
+}
+
 pub trait TxBundle<D>: Sized + Send + 'static {
     type Rx: RxBundle<D>;
     /// construct all channel pairs
     fn new() -> (Self, Self::Rx);
 }
 
-pub trait RxBundle<D>: Send + 'static {
+pub trait RxBundle<D>: Sized + Send + 'static {
     /// drains all channels without blocking, routing messages to destination methods
     fn drain_all(&mut self, dest: &mut D);
 }
@@ -270,39 +274,39 @@ impl<D> RxBundle<D> for () {
 }
 
 #[macro_export]
-macro_rules! make_tx_rx_bundles_for {
+macro_rules! channel_routing_for {
     (
-        $dest:ident, {
+        $prefix:ident {
             $(
                 $source:ident => {
-                    $( $field:ident : [ $msg:ty ; $size:expr ] => $handler:ident ),* $(,)?
+                    $( $field:ident : [ $msg:ty ; $size:expr ] ),* $(,)?
                 }
             ),* $(,)?
         }
     ) => {
         paste::paste! {
-            pub struct [<$dest TxBundle>] {
+            pub struct [<$prefix TxBundle>] {
                 $(
                     $(pub [<$source:snake _ $field>]: Option<rtrb::Producer<$msg>>,)*
                 )*
             }
 
-            pub struct [<$dest RxBundle>] {
+            pub struct [<$prefix RxBundle>] {
                 $(
                     $(pub [<$source:snake _ $field>]: rtrb::Consumer<$msg>,)*
                 )*
             }
 
             $(
-                pub struct [<$source To $dest>] {
+                pub struct [<$source To $prefix>] {
                     $(pub $field: rtrb::Producer<$msg>,)*
                 }
             )*
 
-            impl [<$dest TxBundle>] {
+            impl [<$prefix TxBundle>] {
                 $(
-                    pub fn [<take_ $source:snake>](&mut self) -> Option<[<$source To $dest>]> {
-                        Some([<$source To $dest>] {
+                    pub fn [<take_ $source:snake>](&mut self) -> Option<[<$source To $prefix>]> {
+                        Some([<$source To $prefix>] {
                             $(
                                 $field: self.[<$source:snake _ $field>].take()?,
                             )*
@@ -311,8 +315,11 @@ macro_rules! make_tx_rx_bundles_for {
                 )*
             }
 
-            impl $crate::sync::chan::TxBundle<$dest> for [<$dest TxBundle>] {
-                type Rx = [<$dest RxBundle>];
+            impl<W> $crate::sync::chan::TxBundle<W> for [<$prefix TxBundle>]
+            where
+                W: Sized $( $( + $crate::sync::chan::MessageHandler<$msg> )* )*
+            {
+                type Rx = [<$prefix RxBundle>];
 
                 fn new() -> (Self, Self::Rx) {
                     $(
@@ -327,12 +334,15 @@ macro_rules! make_tx_rx_bundles_for {
                 }
             }
 
-            impl $crate::sync::chan::RxBundle<$dest> for [<$dest RxBundle>] {
-                fn drain_all(&mut self, dest: &mut $dest) {
+            impl<W> $crate::sync::chan::RxBundle<W> for [<$prefix RxBundle>]
+            where
+                W: Sized $( $( + $crate::sync::chan::MessageHandler<$msg> )* )*
+            {
+                fn drain_all(&mut self, dest: &mut W) {
                     $(
                         $(
                             while let Ok(msg) = self.[<$source:snake _ $field>].pop() {
-                                dest.$handler(msg);
+                                $crate::sync::chan::MessageHandler::handle(dest, msg);
                             }
                         )*
                     )*
@@ -342,5 +352,5 @@ macro_rules! make_tx_rx_bundles_for {
     };
 }
 
-pub(crate) use make_tx_rx_bundles_for;
+pub(crate) use channel_routing_for;
 // }}}

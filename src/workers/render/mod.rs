@@ -7,19 +7,12 @@ use rtrb::{Consumer, Producer};
 use winit::window::Window;
 
 use crate::{
-    app::RendererToApp,
-    debug::RendererTelemetry,
     gpu::{ctx::VulkanCtx, pass::Task},
-    render::{
-        passes::{ClearPass, FrameCtx, PresentPass, depth::DepthPrepass},
-        present::Presenter,
-    },
     sync::{chan::{SafeSend, bounded}, worker::Worker},
 };
-
-// inbound_aux_channels!(Renderer, {
-//     ui: [UiMsg; 1024] => handle_ui_msg,
-// });
+use super::msgs::{RendererTelemetry, RendererToApp};
+use passes::{depth::DepthPrepass, frame::{ClearPass, FrameCtx, PresentPass}};
+use present::Presenter;
 
 pub struct RendererInit {
     pub ctx: Arc<VulkanCtx>,

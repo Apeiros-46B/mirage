@@ -9,24 +9,17 @@ use winit::{
 };
 
 use crate::{
-    debug::{GameTelemetry, RendererTelemetry},
-    game::{Game, GameInit, GameMsg},
     gpu::ctx::VulkanCtx,
-    render::{Renderer, RendererInit, RendererMsg},
     sync::{
-        chan::{RxBundle, SafeSend, TxBundle, make_tx_rx_bundles_for},
+        chan::{MessageHandler, RxBundle, SafeSend, TxBundle},
         worker::{WorkerExt, WorkerHandle},
     },
+    workers::{
+        game::{Game, GameInit, GameMsg},
+        msgs::{AppRxBundle, AppTxBundle, GameTelemetry, RendererTelemetry},
+        render::{Renderer, RendererInit, RendererMsg},
+    },
 };
-
-make_tx_rx_bundles_for!(App, {
-    Game => {
-        telemetry: [GameTelemetry; 64] => handle_game_telemetry,
-    },
-    Renderer => {
-        telemetry: [RendererTelemetry; 64] => handle_renderer_telemetry,
-    },
-});
 
 pub struct App {
     initialised: bool,
@@ -45,7 +38,7 @@ impl App {
     pub fn new() -> Self {
         let egui_ctx = egui::Context::default();
 
-        let (aux_tx, aux_rx) = AppTxBundle::new();
+        let (aux_tx, aux_rx) = TxBundle::<App>::new();
 
         Self {
             initialised: false,
@@ -58,12 +51,16 @@ impl App {
             renderer: Renderer::spawn(),
         }
     }
+}
 
-    fn handle_game_telemetry(&mut self, msg: GameTelemetry) {
+impl MessageHandler<GameTelemetry> for App {
+    fn handle(&mut self, msg: GameTelemetry) {
         // TODO
     }
+}
 
-    fn handle_renderer_telemetry(&mut self, msg: RendererTelemetry) {
+impl MessageHandler<RendererTelemetry> for App {
+    fn handle(&mut self, msg: RendererTelemetry) {
         // TODO
     }
 }

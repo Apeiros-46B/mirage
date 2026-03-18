@@ -4,11 +4,7 @@ mod gpu;
 mod sync;
 mod world;
 
-// workers
-mod audio;
-mod game;
-mod render;
-mod stream;
+mod workers;
 
 mod app;
 mod error;
