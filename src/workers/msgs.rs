@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use winit::{event::{ElementState, MouseButton}, keyboard::PhysicalKey, window::Window};
+use egui::{ClippedPrimitive, TexturesDelta};
+use winit::{dpi::PhysicalSize, event::{ElementState, MouseButton}, keyboard::PhysicalKey, window::Window};
 
 use crate::{gpu::ctx::VulkanCtx, sync::worker::channel_routing_for};
 
@@ -24,12 +25,12 @@ channel_routing_for!(App {
 });
 
 pub struct GameInit {
-    pub win: Arc<Window>,
+    pub sz: PhysicalSize<u32>,
     pub app_tx: GameToApp,
 }
 
 pub enum GameMsg {
-    Resized,
+    Resized(PhysicalSize<u32>),
     KeyPress(PhysicalKey, ElementState),
     MouseClick(MouseButton, ElementState),
     MouseMotion(f32, f32),
@@ -40,13 +41,20 @@ channel_routing_for!(Game {
 });
 
 pub struct RendererInit {
+    pub sz: PhysicalSize<u32>,
     pub ctx: Arc<VulkanCtx>,
-    pub win: Arc<Window>,
     pub app_tx: RendererToApp,
 }
 
 pub enum RendererMsg {
-    Resized,
+    Resized(PhysicalSize<u32>),
+}
+
+pub struct EguiUpdate {
+    primitives: Vec<ClippedPrimitive>,
+    textures_delta: TexturesDelta,
+    screen_size_px: [u32; 2],
+    pixels_per_point: f32,
 }
 
 channel_routing_for!(Renderer {

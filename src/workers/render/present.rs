@@ -1,7 +1,5 @@
-use std::sync::Arc;
-
 use ash::{khr, vk};
-use winit::window::Window;
+use winit::dpi::PhysicalSize;
 
 use crate::gpu::ctx::VulkanCtx;
 
@@ -309,17 +307,17 @@ impl Swapchain {
 
 // {{{ presenter
 pub struct Presenter {
-    pub swapchain: Swapchain,
     pub resize_requested: bool,
+    pub inner_surf_sz: (u32, u32),
+    pub swapchain: Swapchain,
     frame_idx: usize,
     frames: [FrameData; FRAMES_IN_FLIGHT],
     cmd_pool: vk::CommandPool,
-    win: Arc<Window>,
 }
 
 impl Presenter {
-    pub fn new(ctx: &VulkanCtx, win: Arc<Window>) -> anyhow::Result<Self> {
-        let swapchain = Swapchain::new(ctx, win.inner_size().into())?;
+    pub fn new(ctx: &VulkanCtx, sz: PhysicalSize<u32>) -> anyhow::Result<Self> {
+        let swapchain = Swapchain::new(ctx, sz.into())?;
 
         let pool_ci = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
@@ -342,12 +340,12 @@ impl Presenter {
         });
 
         Ok(Self {
-            win,
-            swapchain,
-            cmd_pool,
-            frames,
-            frame_idx: 0,
             resize_requested: false,
+            inner_surf_sz: sz.into(),
+            swapchain,
+            frame_idx: 0,
+            frames,
+            cmd_pool,
         })
     }
 
@@ -376,9 +374,10 @@ impl Presenter {
         }
 
         if self.resize_requested {
-            self.swapchain.recreate(ctx, self.win.inner_size().into())?;
+            self.swapchain.recreate(ctx, self.inner_surf_sz)?;
             self.resize_requested = false;
             did_resize = true;
+            println!("resized render to {:?}", self.inner_surf_sz);
         }
 
         let target = match self.swapchain.acquire(frame.img_available_sem)? {
@@ -434,6 +433,11 @@ impl Presenter {
 
         self.frame_idx = (self.frame_idx + 1) % FRAMES_IN_FLIGHT;
         Ok(())
+    }
+
+    pub fn request_resize(&mut self, sz: PhysicalSize<u32>) {
+        self.inner_surf_sz = sz.into();
+        self.resize_requested = true;
     }
 }
 // }}}

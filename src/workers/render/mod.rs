@@ -1,6 +1,7 @@
 mod passes;
 mod present;
 
+use ash::vk;
 use std::{sync::Arc, time::Duration};
 
 use crate::{
@@ -40,15 +41,15 @@ impl Drop for RendererState {
 pub struct Renderer;
 
 impl Worker for Renderer {
-    type State = RendererState;
     type Init = RendererInit;
+    type State = RendererState;
     type Channels = RendererRxBundle;
 
     fn on_resume(&self, init: Self::Init) -> anyhow::Result<Self::State> {
         let ctx = init.ctx;
         let app_tx = init.app_tx;
-        let extent = crate::util::extent_of(&init.win);
-        let presenter = Presenter::new(&ctx, init.win)?;
+        let extent = vk::Extent2D { width: init.sz.width, height: init.sz.height };
+        let presenter = Presenter::new(&ctx, init.sz)?;
 
         let clear_pass = ClearPass;
         let depth_prepass = DepthPrepass::new(&ctx, extent)?;
@@ -75,7 +76,11 @@ impl Worker for Renderer {
         this.app_tx.telemetry.send(RendererTelemetry { frame_time: dt });
 
         let Some((target, cmd, resize)) = this.presenter.begin_frame(&this.ctx)? else {
-            return Ok(()); // minimized or out-of-date, skip drawing
+            if this.presenter.inner_surf_sz.0 == 0 || this.presenter.inner_surf_sz.1 == 0 {
+                // the window is minimized, sleep to avoid busy wait
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            return Ok(());
         };
 
         if resize {
@@ -105,7 +110,7 @@ impl Worker for Renderer {
 impl MessageHandler<RendererMsg> for RendererState {
     fn handle(&mut self, msg: RendererMsg) {
         match msg {
-            RendererMsg::Resized => self.presenter.resize_requested = true,
+            RendererMsg::Resized(sz) => self.presenter.request_resize(sz),
         }
     }
 }

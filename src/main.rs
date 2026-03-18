@@ -8,7 +8,6 @@ mod workers;
 
 mod app;
 mod error;
-mod util;
 
 use winit::event_loop::EventLoop;
 

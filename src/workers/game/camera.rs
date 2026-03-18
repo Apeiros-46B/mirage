@@ -77,6 +77,7 @@ impl Camera {
     }
 
     pub fn resize(&mut self, new_sz: PhysicalSize<u32>) {
+        println!("resized game to {:?}", new_sz);
         self.scr_sz = Vec2::new(new_sz.width as f32, new_sz.height as f32);
         self.recalc_proj();
     }

@@ -3,8 +3,6 @@ pub mod input;
 
 use std::{sync::Arc, time::Duration};
 
-use winit::window::Window;
-
 use crate::sync::{
     chan::SafeSend,
     worker::{MessageHandler, Worker, WorkerControl, WorkerExt},
@@ -21,7 +19,6 @@ pub trait Polled {
 pub struct GameState {
     input: InputState,
     camera: Camera,
-    win: Arc<Window>,
     app_tx: GameToApp,
 }
 
@@ -29,15 +26,14 @@ pub struct GameState {
 pub struct Game;
 
 impl Worker for Game {
-    type State = GameState;
     type Init = GameInit;
+    type State = GameState;
     type Channels = GameRxBundle;
 
     fn on_resume(&self, init: Self::Init) -> anyhow::Result<Self::State> {
         Ok(GameState {
             input: InputState::new(),
-            camera: Camera::new(init.win.inner_size()),
-            win: init.win,
+            camera: Camera::new(init.sz),
             app_tx: init.app_tx,
         })
     }
@@ -77,7 +73,7 @@ impl MessageHandler<GameMsg> for GameState {
                 self.camera.poll(&mut self.input, 0.0);
                 // ^ 0.0 dt to apply mouse movements only
             },
-            GameMsg::Resized => self.camera.resize(self.win.inner_size()),
+            GameMsg::Resized(sz) => self.camera.resize(sz),
         }
     }
 }

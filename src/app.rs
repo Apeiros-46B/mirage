@@ -1,7 +1,11 @@
-use std::{sync::Arc, time::{Duration, Instant}};
+use std::{sync::Arc, time::Duration};
 
 use winit::{
-    application::ApplicationHandler, event::{DeviceEvent, DeviceId, ElementState, StartCause, WindowEvent}, event_loop::{ActiveEventLoop, ControlFlow}, keyboard::{KeyCode, PhysicalKey}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}
+    application::ApplicationHandler,
+    event::{DeviceEvent, DeviceId, StartCause, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow},
+    raw_window_handle::{HasDisplayHandle, HasWindowHandle},
+    window::{Window, WindowAttributes, WindowId}
 };
 
 use crate::{
@@ -65,13 +69,13 @@ impl App {
         self.rx = Some(rx);
 
         self.renderer.resume(RendererInit {
+            sz: win.inner_size(),
             ctx: Arc::new(ctx),
-            win: win.clone(),
             app_tx: tx.take_renderer().unwrap(),
         });
 
         self.game.resume(GameInit {
-            win,
+            sz: win.inner_size(),
             app_tx: tx.take_game().unwrap(),
         });
     }
@@ -166,9 +170,11 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 // TODO: egui
             }
-            WindowEvent::Resized(_) => {
-                self.game.tx.send(GameMsg::Resized);
-                self.renderer.tx.send(RendererMsg::Resized);
+            WindowEvent::Resized(sz) => {
+                if sz.width != 0 && sz.height != 0 {
+                    self.game.tx.send(GameMsg::Resized(sz));
+                }
+                self.renderer.tx.send(RendererMsg::Resized(sz));
             },
             WindowEvent::MouseInput { state, button, .. } => {
                 if consumed {
