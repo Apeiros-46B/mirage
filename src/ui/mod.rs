@@ -1,5 +1,5 @@
 use egui::{Color32, Context, Ui, Window};
-use egui_plot::{Line, Plot, PlotBounds, PlotPoints};
+use egui_plot::{Line, Plot, PlotBounds, PlotPoints, VLine};
 use winit::event_loop::ActiveEventLoop;
 
 use crate::{
@@ -83,9 +83,13 @@ fn sparkline(ui: &mut Ui, id: &str, hist: &HistoryRing<f32>) {
         .map(|(i, v)| [i as f64, v.into()])
         .collect();
 
-    let line = Line::new(id, points)
+    let data = Line::new(id, points)
         .color(Color32::from_rgb(100, 200, 100))
         .width(1.5);
+
+    let sweep = VLine::new(id, hist.head as f64)
+        .color(Color32::from_rgba_unmultiplied(255, 0, 0, 200))
+        .width(2.0);
 
     Plot::new(id)
         .height(35.0)
@@ -100,6 +104,7 @@ fn sparkline(ui: &mut Ui, id: &str, hist: &HistoryRing<f32>) {
                 [0.0, 0.0],
                 [HISTORY_CAPACITY as f64, 20.0]
             ));
-            plot.line(line);
+            plot.line(data);
+            plot.vline(sweep);
         });
 }
