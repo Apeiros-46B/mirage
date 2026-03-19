@@ -141,16 +141,12 @@ impl Task<FrameCtx> for DepthPrepass {
     unsafe fn execute(
         &mut self,
         ctx: &VulkanCtx,
-        frame: &FrameCtx,
+        frame: &mut FrameCtx,
         cmd: vk::CommandBuffer,
     ) -> anyhow::Result<()> {
         let depth_barrier = vk::ImageMemoryBarrier2::default()
             .image(self.depth_target.img)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::DEPTH,
-                base_mip_level: 0, level_count: 1,
-                base_array_layer: 0, layer_count: 1,
-            })
+            .subresource_range(DEPTH_SUBRES_RANGE)
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
             .src_stage_mask(vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS)

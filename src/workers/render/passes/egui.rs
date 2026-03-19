@@ -9,8 +9,8 @@ use gpu_allocator::{
 use winit::dpi::PhysicalSize;
 
 use crate::{
-    gpu::{ctx::VulkanCtx, img::AllocatedImage, sync::ImageBarrierExt, task::Task},
-    workers::{msgs::EguiUpdate, render::present::FRAMES_IN_FLIGHT},
+    gpu::{MappedBuffer, ctx::VulkanCtx, img::AllocatedImage, sync::ImageBarrierExt, task::Task},
+    workers::{msgs::EguiUpdate, render::frames::FRAMES_IN_FLIGHT},
 };
 use super::frame::FrameCtx;
 
@@ -18,13 +18,6 @@ const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/egui-pass.spv"));
 const MB16: u64 = 16 * 1024 * 1024;
 const CHUNK_PER_FIF: usize = MB16 as usize; // one chunk of the buf per FIF
 const IDX_OFS: usize = CHUNK_PER_FIF / 2; // indices start halfway through the chunk
-
-#[derive(Clone, Copy)]
-struct MappedBuffer(pub *mut u8);
-
-// safety: we only ever access the MappedBuffer from this thread
-unsafe impl Send for MappedBuffer {}
-unsafe impl Sync for MappedBuffer {}
 
 pub struct EguiPass {
     primitives: Vec<ClippedPrimitive>,
@@ -264,7 +257,7 @@ impl Task<FrameCtx> for EguiPass {
     unsafe fn execute(
         &mut self,
         ctx: &VulkanCtx,
-        args: &FrameCtx,
+        args: &mut FrameCtx,
         cmd: ash::vk::CommandBuffer,
     ) -> anyhow::Result<()> {
         let fif = args.frame_in_flight_idx;

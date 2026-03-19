@@ -11,7 +11,7 @@ pub trait Task<T> {
     unsafe fn execute(
         &mut self,
         ctx: &VulkanCtx,
-        args: &T,
+        args: &mut T,
         cmd: vk::CommandBuffer,
     ) -> anyhow::Result<()>;
 }

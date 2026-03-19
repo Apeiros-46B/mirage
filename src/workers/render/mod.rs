@@ -1,5 +1,5 @@
+mod frames;
 mod passes;
-mod present;
 
 use ash::vk;
 use std::{sync::Arc, time::Duration};
@@ -21,10 +21,10 @@ use passes::{
     egui::EguiPass,
     frame::{ClearPass, FrameCtx, PresentPass},
 };
-use present::Presenter;
+use frames::FrameManager;
 
 pub struct RendererState {
-    presenter: Presenter,
+    frames: FrameManager,
 
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
@@ -40,7 +40,7 @@ impl Drop for RendererState {
         // ctx is dropped by the compiler after this is done
         unsafe {
             let _ = self.ctx.dev.device_wait_idle();
-            self.presenter.destroy(&self.ctx);
+            self.frames.destroy(&self.ctx);
         }
     }
 }
@@ -57,15 +57,15 @@ impl Worker for Renderer {
         let ctx = init.ctx;
         let app_tx = init.app_tx;
         let extent = vk::Extent2D { width: init.sz.width, height: init.sz.height };
-        let presenter = Presenter::new(&ctx, init.sz)?;
+        let frames = FrameManager::new(ctx.clone(), init.sz)?;
 
         let clear_pass = ClearPass;
         let depth_prepass = DepthPrepass::new(&ctx, extent)?;
         let present_pass = PresentPass;
-        let egui_pass = EguiPass::new(&ctx, presenter.swapchain.fmt)?;
+        let egui_pass = EguiPass::new(&ctx, frames.swapchain.fmt)?;
 
         Ok(RendererState {
-            presenter,
+            frames,
             clear_pass,
             depth_prepass,
             present_pass,
@@ -85,8 +85,8 @@ impl Worker for Renderer {
 
         this.app_tx.telemetry.send(RendererTelemetry { frame_time: dt });
 
-        let Some(target) = this.presenter.begin_frame(&this.ctx)? else {
-            if this.presenter.is_minimized() {
+        let Some(target) = this.frames.begin_frame(&this.ctx)? else {
+            if this.frames.is_minimized() {
                 // sleep to avoid busy wait
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -100,30 +100,30 @@ impl Worker for Renderer {
             this.egui_pass.resize(&this.ctx, target.img.extent)?;
         }
 
-        let frame = FrameCtx {
+        let mut frame = FrameCtx {
             frame_in_flight_idx: target.idx,
             frame_idx: tick,
             time: since_wake.as_secs_f64(),
             dt,
             img: target.img,
-            swapchain_base_barrier: this.presenter.swapchain.base_barrier(),
+            swapchain_base_barrier: target.base_barrier,
         };
 
         unsafe {
-            this.clear_pass.execute(&this.ctx, &frame, target.cmd)?;
-            this.depth_prepass.execute(&this.ctx, &frame, target.cmd)?;
-            this.present_pass.execute(&this.ctx, &frame, target.cmd)?;
-            this.egui_pass.execute(&this.ctx, &frame, target.cmd)?;
+            this.clear_pass.execute(&this.ctx, &mut frame, target.cmd)?;
+            this.depth_prepass.execute(&this.ctx, &mut frame, target.cmd)?;
+            this.present_pass.execute(&this.ctx, &mut frame, target.cmd)?;
+            this.egui_pass.execute(&this.ctx, &mut frame, target.cmd)?;
         }
 
-        this.presenter.submit_frame(&this.ctx)
+        this.frames.submit_frame(&this.ctx)
     }
 }
 
 impl MessageHandler<RendererMsg> for RendererState {
     fn handle(&mut self, msg: RendererMsg) {
         match msg {
-            RendererMsg::Resized(sz) => self.presenter.request_resize(sz),
+            RendererMsg::Resized(sz) => self.frames.request_resize(sz),
         }
     }
 }

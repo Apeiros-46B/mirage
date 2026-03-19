@@ -1,6 +1,9 @@
 use ash::vk;
 
-use crate::{gpu::{ctx::VulkanCtx, sync::ImageBarrierExt, task::Task}, workers::render::present::RenderImage};
+use crate::{
+    gpu::{ctx::VulkanCtx, sync::ImageBarrierExt, task::Task},
+    workers::render::frames::RenderImage,
+};
 
 pub struct FrameCtx {
     pub frame_in_flight_idx: usize, // frame_idx % MAX_FRAMES_IN_FLIGHT
@@ -17,7 +20,7 @@ impl Task<FrameCtx> for ClearPass {
     unsafe fn execute(
         &mut self,
         ctx: &VulkanCtx,
-        frame: &FrameCtx,
+        frame: &mut FrameCtx,
         cmd: vk::CommandBuffer,
     ) -> anyhow::Result<()> {
         unsafe {
@@ -64,7 +67,7 @@ impl Task<FrameCtx> for PresentPass {
     unsafe fn execute(
         &mut self,
         ctx: &VulkanCtx,
-        frame: &FrameCtx,
+        frame: &mut FrameCtx,
         cmd: vk::CommandBuffer,
     ) -> anyhow::Result<()> {
         unsafe {

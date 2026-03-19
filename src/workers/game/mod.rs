@@ -54,11 +54,7 @@ impl Worker for Game {
         Ok(())
     }
 
-    fn run(
-        self,
-        ctrl: Arc<WorkerControl<Self::Init>>,
-        rx: Self::Channels,
-    ) {
+    fn run(self, ctrl: Arc<WorkerControl<Self::Init>>, rx: Self::Channels) {
         self.run_tickrate(ctrl, rx, 120.0);
     }
 }

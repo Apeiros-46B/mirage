@@ -1,7 +1,9 @@
+use std::{ops::{Index, IndexMut}, slice::{Iter, IterMut}, sync::Arc};
+
 use ash::{khr, vk};
 use winit::dpi::PhysicalSize;
 
-use crate::gpu::ctx::VulkanCtx;
+use crate::{gpu::{arena::GPUArena, ctx::VulkanCtx}, util::array_try_from_fn};
 
 pub const FRAMES_IN_FLIGHT: usize = 2;
 const SWAPCHAIN_MIN_IMGS: u32 = 3;
@@ -14,15 +16,18 @@ const IMG_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
 };
 
 // {{{ image and sync data
-pub struct RenderTarget {
+pub struct RenderTarget<'a> {
+    pub alloc: &'a mut GPUArena,
     pub img: RenderImage,
     pub cmd: vk::CommandBuffer,
     pub idx: usize,
     pub did_resize: bool,
+    pub base_barrier: vk::ImageMemoryBarrier2<'static>,
 }
 
 // we have FRAMES_IN_FLIGHT of these
 pub struct FrameData {
+    pub alloc: GPUArena,
     pub cmd: vk::CommandBuffer,
     pub img_available_sem: vk::Semaphore,
     pub in_flight_fence: vk::Fence,
@@ -312,8 +317,8 @@ impl Swapchain {
 }
 // }}}
 
-// {{{ presenter
-pub struct Presenter {
+// {{{ frame manager
+pub struct FrameManager {
     pub swapchain: Swapchain,
 
     frame_idx: usize,
@@ -324,33 +329,36 @@ pub struct Presenter {
     inner_surf_sz: (u32, u32),
 }
 
-impl Presenter {
-    pub fn new(ctx: &VulkanCtx, sz: PhysicalSize<u32>) -> anyhow::Result<Self> {
-        let swapchain = Swapchain::new(ctx, sz.into())?;
+impl FrameManager {
+    pub fn new(ctx: Arc<VulkanCtx>, sz: PhysicalSize<u32>) -> anyhow::Result<Self> {
+        let swapchain = Swapchain::new(&ctx, sz.into())?;
 
-        let pool_ci = vk::CommandPoolCreateInfo::default()
+        let cmd_pool_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(ctx.gpu.graphics_idx);
-        let cmd_pool = unsafe { ctx.dev.create_command_pool(&pool_ci, None)? };
+        let cmd_pool = unsafe { ctx.dev.create_command_pool(&cmd_pool_info, None)? };
 
-        let cmd_ai = vk::CommandBufferAllocateInfo::default()
+        let cmd_info = vk::CommandBufferAllocateInfo::default()
             .command_pool(cmd_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(FRAMES_IN_FLIGHT as u32);
-        let cmd_bufs = unsafe { ctx.dev.allocate_command_buffers(&cmd_ai)? };
+        let cmd_bufs = unsafe { ctx.dev.allocate_command_buffers(&cmd_info)? };
 
-        let fence_ci = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-        let sem_ci = vk::SemaphoreCreateInfo::default();
+        let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+        let sem_info = vk::SemaphoreCreateInfo::default();
 
-        let frames = std::array::from_fn(|i| FrameData {
-            cmd: cmd_bufs[i],
-            img_available_sem: unsafe {
-                ctx.dev.create_semaphore(&sem_ci, None).unwrap()
-            },
-            in_flight_fence: unsafe {
-                ctx.dev.create_fence(&fence_ci, None).unwrap()
-            },
-        });
+        let frames = array_try_from_fn(|i| -> anyhow::Result<FrameData> {
+            Ok(FrameData {
+                cmd: cmd_bufs[i],
+                img_available_sem: unsafe {
+                    ctx.dev.create_semaphore(&sem_info, None)?
+                },
+                in_flight_fence: unsafe {
+                    ctx.dev.create_fence(&fence_info, None)?
+                },
+                alloc: GPUArena::new(ctx.clone(), 16 * 1024 * 1024)?,
+            })
+        })?;
 
         Ok(Self {
             resize_requested: false,
@@ -375,9 +383,9 @@ impl Presenter {
     pub fn begin_frame(
         &mut self,
         ctx: &VulkanCtx,
-    ) -> anyhow::Result<Option<RenderTarget>> {
+    ) -> anyhow::Result<Option<RenderTarget<'_>>> {
         let mut did_resize = false;
-        let frame = &self.frames[self.frame_idx];
+        let frame = &mut self.frames[self.frame_idx];
 
         unsafe {
             ctx.dev.wait_for_fences(
@@ -386,6 +394,9 @@ impl Presenter {
                 u64::MAX,
             )?;
         }
+
+        // the GPU is done with the frame, we can clear the arena now
+        frame.alloc.clear();
 
         if self.resize_requested {
             self.swapchain.recreate(ctx, self.inner_surf_sz)?;
@@ -414,10 +425,12 @@ impl Presenter {
         }
 
         Ok(Some(RenderTarget {
+            alloc: &mut frame.alloc,
             did_resize,
             idx: self.frame_idx,
             cmd: frame.cmd,
             img,
+            base_barrier: self.swapchain.base_barrier(),
         }))
     }
 
@@ -463,6 +476,52 @@ impl Presenter {
 
     pub fn is_minimized(&self) -> bool {
         self.inner_surf_sz.0 == 0 || self.inner_surf_sz.1 == 0
+    }
+}
+// }}}
+
+// {{{ utility for storing resources per frame in flight
+pub struct PerFrame<T> {
+    items: [T; FRAMES_IN_FLIGHT],
+}
+
+impl<T> PerFrame<T> {
+    pub fn try_init<F, E>(mut cb: F) -> Result<Self, E>
+    where
+        F: FnMut(usize) -> Result<T, E>,
+    {
+        let items = array_try_from_fn(&mut cb)?;
+        Ok(Self { items })
+    }
+
+    pub fn init<F>(mut cb: F) -> Self
+    where
+        F: FnMut(usize) -> T,
+    {
+        let items = std::array::from_fn(&mut cb);
+        Self { items }
+    }
+
+    pub fn iter(&self) -> Iter<'_, T> {
+        self.items.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
+        self.items.iter_mut()
+    }
+}
+
+impl<T> Index<usize> for PerFrame<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.items[index]
+    }
+}
+
+impl<T> IndexMut<usize> for PerFrame<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.items[index]
     }
 }
 // }}}

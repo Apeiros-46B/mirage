@@ -1,3 +1,4 @@
+pub mod arena;
 pub mod ctx;
 pub mod img;
 pub mod surf;
@@ -8,6 +9,14 @@ use anyhow::anyhow;
 use ash::vk;
 
 use crate::gpu::surf::Surface;
+
+#[derive(Clone, Copy)]
+pub struct MappedBuffer(pub *mut u8);
+
+// safety: we only ever access the MappedBuffer from a single thread
+unsafe impl Send for MappedBuffer {}
+unsafe impl Sync for MappedBuffer {}
+
 
 #[derive(Debug, Clone)]
 pub struct GPU {
