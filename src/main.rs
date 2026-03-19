@@ -1,13 +1,11 @@
-// utility
-mod debug;
 mod gpu;
 mod sync;
+mod ui;
+mod workers;
 mod world;
 
-mod workers;
-
 mod app;
-mod error;
+mod util;
 
 use winit::event_loop::EventLoop;
 

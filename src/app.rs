@@ -2,19 +2,17 @@ use std::{sync::Arc, time::{Duration, Instant}};
 
 use winit::{
     application::ApplicationHandler,
-    event::{DeviceEvent, DeviceId, StartCause, WindowEvent},
+    event::{DeviceEvent, DeviceId, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow},
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::{Window, WindowAttributes, WindowId}
 };
 
 use crate::{
-    gpu::ctx::VulkanCtx,
-    sync::{
+    gpu::ctx::VulkanCtx, sync::{
         chan::SafeSend,
         worker::{MessageHandler, WorkerExt, WorkerHandle},
-    },
-    workers::{
+    }, ui::{UIResponse, UIState, ui_main}, workers::{
         game::Game,
         msgs::{
             AppRxBundle,
@@ -28,12 +26,13 @@ use crate::{
             RendererTelemetry,
         },
         render::Renderer,
-    },
+    }
 };
 
 pub struct App {
     initialised: bool,
 
+    ui_state: UIState,
     egui_ctx: egui::Context,
     egui_state: Option<egui_winit::State>,
     egui_pending_textures: egui::TexturesDelta,
@@ -53,6 +52,7 @@ impl App {
         Self {
             initialised: false,
 
+            ui_state: Default::default(),
             egui_ctx,
             egui_state: None,
             egui_pending_textures: Default::default(),
@@ -107,16 +107,15 @@ impl App {
 
         let raw_input = egui_state.take_egui_input(win);
 
+        let mut resp = UIResponse::default();
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
-            egui::Window::new("Debug").show(ctx, |ui| {
-                ui.label("Hello world!");
-                if ui.button("Quit").clicked() {
-                    evt_loop.exit();
-                }
-            });
+            ui_main(&self.ui_state, &mut resp, ctx);
         });
-
-        egui_state.handle_platform_output(win, full_output.platform_output);
+        resp.handle(evt_loop);
+        egui_state.handle_platform_output(
+            win,
+            full_output.platform_output,
+        );
 
         let clipped_primitives = self.egui_ctx.tessellate(
             full_output.shapes,
@@ -142,13 +141,13 @@ impl App {
 
 impl MessageHandler<GameTelemetry> for App {
     fn handle(&mut self, msg: GameTelemetry) {
-        // dbg!(msg);
+        self.ui_state.tick_time = msg.tick_time;
     }
 }
 
 impl MessageHandler<RendererTelemetry> for App {
     fn handle(&mut self, msg: RendererTelemetry) {
-        // dbg!(msg);
+        self.ui_state.frame_time = msg.frame_time;
     }
 }
 
@@ -188,7 +187,7 @@ impl ApplicationHandler for App {
             if let Some(win) = self.win.as_ref() {
                 win.request_redraw();
             }
-            // 60Hz
+            // ~60Hz UI processing
             self.next_redraw = now + Duration::from_secs_f64(1.0 / 60.0);
         }
 
