@@ -9,10 +9,13 @@ use winit::{
 };
 
 use crate::{
-    gpu::ctx::VulkanCtx, sync::{
+    gpu::ctx::VulkanCtx,
+    sync::{
         chan::SafeSend,
-        worker::{MessageHandler, WorkerExt, WorkerHandle},
-    }, ui::{UIResponse, UIState, ui_main}, workers::{
+        worker::{WorkerExt, WorkerHandle},
+    },
+    ui::{UIResponse, UIState, ui_main},
+    workers::{
         game::Game,
         msgs::{
             AppRxBundle,
@@ -20,10 +23,8 @@ use crate::{
             EguiUpdate,
             GameInit,
             GameMsg,
-            GameTelemetry,
             RendererInit,
             RendererMsg,
-            RendererTelemetry,
         },
         render::Renderer,
     }
@@ -68,10 +69,10 @@ impl App {
 
     fn resume_workers(&mut self, win: Arc<Window>) {
         let ctx = VulkanCtx::new(
-                win.display_handle().expect("failed to get display").as_raw(),
-                win.window_handle().expect("failed to get window").as_raw(),
-                win.clone(),
-            )
+            win.display_handle().expect("failed to get display").as_raw(),
+            win.window_handle().expect("failed to get window").as_raw(),
+            win.clone(),
+        )
             .expect("failed to init Vulkan");
 
         let (mut tx, rx) = AppTxBundle::new_pair();
@@ -139,18 +140,6 @@ impl App {
     }
 }
 
-impl MessageHandler<GameTelemetry> for App {
-    fn handle(&mut self, msg: GameTelemetry) {
-        self.ui_state.tick_time = msg.tick_time;
-    }
-}
-
-impl MessageHandler<RendererTelemetry> for App {
-    fn handle(&mut self, msg: RendererTelemetry) {
-        self.ui_state.frame_time = msg.frame_time;
-    }
-}
-
 impl ApplicationHandler for App {
     fn resumed(&mut self, evt_loop: &ActiveEventLoop) {
         if self.initialised {
@@ -177,9 +166,8 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, evt_loop: &ActiveEventLoop) {
         // handle incoming messages
-        if let Some(mut rx) = self.rx.take() {
-            rx.drain_all(self);
-            self.rx = Some(rx);
+        if let Some(rx) = &mut self.rx {
+            rx.drain_all(&mut self.ui_state);
         }
 
         let now = Instant::now();
