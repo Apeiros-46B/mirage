@@ -2,22 +2,15 @@ use std::{collections::HashMap, mem};
 
 use ash::vk;
 use egui::{ClippedPrimitive, TextureId, TexturesDelta, epaint::Vertex};
-use gpu_allocator::{
-    MemoryLocation,
-    vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
-};
 use winit::dpi::PhysicalSize;
 
 use crate::{
-    gpu::{MappedBuffer, ctx::VulkanCtx, img::AllocatedImage, sync::ImageBarrierExt, task::Task},
-    workers::{msgs::EguiUpdate, render::frames::FRAMES_IN_FLIGHT},
+    gpu::{ctx::VulkanCtx, img::AllocatedImage, sync::ImageBarrierExt, task::Task},
+    workers::{msgs::EguiUpdate, render::frames::PerFrame},
 };
 use super::frame::FrameCtx;
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/egui-pass.spv"));
-const MB16: u64 = 16 * 1024 * 1024;
-const CHUNK_PER_FIF: usize = MB16 as usize; // one chunk of the buf per FIF
-const IDX_OFS: usize = CHUNK_PER_FIF / 2; // indices start halfway through the chunk
 
 pub struct EguiPass {
     primitives: Vec<ClippedPrimitive>,
@@ -34,11 +27,7 @@ pub struct EguiPass {
     sampler: vk::Sampler,
 
     textures: HashMap<TextureId, (AllocatedImage, vk::DescriptorSet)>,
-    pending_staging: [Vec<(vk::Buffer, Allocation)>; FRAMES_IN_FLIGHT],
-    pending_frees: [Vec<AllocatedImage>; FRAMES_IN_FLIGHT],
-
-    geom_buf: vk::Buffer,
-    geom_ptr: MappedBuffer,
+    pending_frees: PerFrame<Vec<AllocatedImage>>,
 }
 
 impl EguiPass {
@@ -194,35 +183,6 @@ impl EguiPass {
         unsafe { ctx.dev.destroy_shader_module(module, None) };
         // }}}
 
-        // {{{ allocate geometry buffer
-        let buf_size = (CHUNK_PER_FIF * FRAMES_IN_FLIGHT) as u64;
-        let buf_info = vk::BufferCreateInfo::default()
-            .size(buf_size)
-            .usage(vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::INDEX_BUFFER);
-
-        let geom_buf = unsafe { ctx.dev.create_buffer(&buf_info, None)? };
-
-        let reqs = unsafe { ctx.dev.get_buffer_memory_requirements(geom_buf) };
-
-        let geom_mem = ctx.alloc.lock().unwrap().allocate(&AllocationCreateDesc {
-            name: "egui_geom",
-            requirements: reqs,
-            location: MemoryLocation::CpuToGpu,
-            linear: true,
-            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-        })?;
-
-        unsafe {
-            ctx.dev.bind_buffer_memory(
-                geom_buf,
-                geom_mem.memory(),
-                geom_mem.offset(),
-            )?
-        };
-
-        let geom_ptr = geom_mem.mapped_ptr().unwrap().as_ptr() as *mut u8;
-        // }}}
-
         Ok(Self {
             primitives: Vec::new(),
             screen_sz_px: winit::dpi::PhysicalSize::new(0, 0),
@@ -237,11 +197,7 @@ impl EguiPass {
             sampler,
 
             textures: HashMap::new(),
-            pending_staging: std::array::from_fn(|_| Vec::new()),
-            pending_frees: std::array::from_fn(|_| Vec::new()),
-
-            geom_buf,
-            geom_ptr: MappedBuffer(geom_ptr),
+            pending_frees: PerFrame::init(|_| Vec::new()),
         })
     }
 
@@ -266,10 +222,6 @@ impl Task<FrameCtx<'_>> for EguiPass {
         mem::swap(&mut self.textures_delta, &mut deltas);
 
         // clean up resources from finished draws
-        for (buf, mem) in self.pending_staging[fif].drain(..) {
-            unsafe { ctx.dev.destroy_buffer(buf, None); }
-            ctx.alloc.lock().unwrap().free(mem).unwrap();
-        }
         for mut img in self.pending_frees[fif].drain(..) {
             unsafe { img.destroy(ctx); }
         }
@@ -291,38 +243,19 @@ impl Task<FrameCtx<'_>> for EguiPass {
             };
 
             let staging_sz = pixels.len() as u64;
-            let staging_info = vk::BufferCreateInfo::default()
-                .size(staging_sz)
-                .usage(vk::BufferUsageFlags::TRANSFER_SRC);
 
-            // TODO: use transient allocator to hand out slices instead of this
-            let staging_buf = unsafe { ctx.dev.create_buffer(&staging_info, None)? };
-
-            let reqs = unsafe { ctx.dev.get_buffer_memory_requirements(staging_buf) };
-            let staging_mem = ctx.alloc.lock().unwrap().allocate(
-                &AllocationCreateDesc {
-                    name: "egui_staging",
-                    requirements: reqs,
-                    location: MemoryLocation::CpuToGpu,
-                    linear: true,
-                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-                }
-            )?;
-
+            let (
+                staging_buf,
+                staging_ofs,
+                staging_ptr
+            ) = frame.in_flight.alloc.alloc(staging_sz, 16);
             unsafe {
-                ctx.dev.bind_buffer_memory(
-                    staging_buf,
-                    staging_mem.memory(),
-                    staging_mem.offset(),
-                )?;
                 std::ptr::copy_nonoverlapping(
                     pixels.as_ptr(),
-                    staging_mem.mapped_ptr().unwrap().as_ptr() as *mut u8,
+                    staging_ptr.0,
                     pixels.len(),
                 );
             }
-
-            self.pending_staging[fif].push((staging_buf, staging_mem));
 
             let extent = vk::Extent3D { width, height, depth: 1 };
             let subres_range = vk::ImageSubresourceRange::default()
@@ -331,6 +264,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
                 .layer_count(1);
 
             let copy_region = vk::BufferImageCopy::default()
+                .buffer_offset(staging_ofs)
                 .image_subresource(vk::ImageSubresourceLayers {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     mip_level: 0,
@@ -457,11 +391,26 @@ impl Task<FrameCtx<'_>> for EguiPass {
         let mut idx_ofs = 0;
 
         // {{{ upload geometry
-        let base_ofs = fif * CHUNK_PER_FIF;
+        let mut total_vert_sz = 0;
+        let mut total_idx_sz = 0;
 
-        let mut vert_byte_ofs = base_ofs;
-        let mut idx_byte_ofs = base_ofs + IDX_OFS; // indices start halfway
+        for ClippedPrimitive { primitive, .. } in &self.primitives {
+            if let egui::epaint::Primitive::Mesh(mesh) = primitive {
+                total_vert_sz += mesh.vertices.len() * mem::size_of::<Vertex>();
+                total_idx_sz += mesh.indices.len() * mem::size_of::<u32>();
+            }
+        }
 
+        let (geom_buf, vbo_ofs, mut vert_ptr) = frame.in_flight.alloc.alloc(
+            total_vert_sz as u64,
+            16,
+        );
+        let (_, ibo_ofs, mut idx_ptr) = frame.in_flight.alloc.alloc(
+            total_idx_sz as u64,
+            16,
+        );
+
+        // copy geometry sequentially
         for ClippedPrimitive { primitive, .. } in &self.primitives {
             let egui::epaint::Primitive::Mesh(mesh) = primitive else { continue };
 
@@ -471,18 +420,18 @@ impl Task<FrameCtx<'_>> for EguiPass {
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     mesh.vertices.as_ptr() as *const u8,
-                    self.geom_ptr.0.add(vert_byte_ofs),
-                    vert_sz
+                    vert_ptr.0,
+                    vert_sz,
                 );
                 std::ptr::copy_nonoverlapping(
                     mesh.indices.as_ptr() as *const u8,
-                    self.geom_ptr.0.add(idx_byte_ofs),
-                    idx_sz
+                    idx_ptr.0,
+                    idx_sz,
                 );
-            }
 
-            vert_byte_ofs += vert_sz;
-            idx_byte_ofs += idx_sz;
+                vert_ptr.0 = vert_ptr.0.add(vert_sz);
+                idx_ptr.0 = idx_ptr.0.add(idx_sz);
+            }
         }
         // }}}
 
@@ -510,11 +459,11 @@ impl Task<FrameCtx<'_>> for EguiPass {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline,
             );
-            ctx.dev.cmd_bind_vertex_buffers(cmd, 0, &[self.geom_buf], &[base_ofs as u64]);
+            ctx.dev.cmd_bind_vertex_buffers(cmd, 0, &[geom_buf], &[vbo_ofs]);
             ctx.dev.cmd_bind_index_buffer(
                 cmd,
-                self.geom_buf,
-                (base_ofs + IDX_OFS) as u64,
+                geom_buf,
+                ibo_ofs,
                 vk::IndexType::UINT32,
             );
         }

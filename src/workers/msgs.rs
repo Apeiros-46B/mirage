@@ -1,7 +1,13 @@
+#![allow(dead_code)]
+
 use std::sync::Arc;
 
 use egui::{ClippedPrimitive, TexturesDelta};
-use winit::{dpi::PhysicalSize, event::{ElementState, MouseButton}, keyboard::PhysicalKey, window::Window};
+use winit::{
+    dpi::PhysicalSize,
+    event::{ElementState, MouseButton},
+    keyboard::PhysicalKey,
+};
 
 use crate::{gpu::ctx::VulkanCtx, sync::worker::channel_routing_for};
 
