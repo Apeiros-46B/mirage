@@ -101,19 +101,17 @@ impl Worker for Renderer {
         }
 
         let mut frame = FrameCtx {
-            frame_in_flight_idx: target.idx,
+            in_flight: target,
             frame_idx: tick,
             time: since_wake.as_secs_f64(),
             dt,
-            img: target.img,
-            swapchain_base_barrier: target.base_barrier,
         };
 
         unsafe {
-            this.clear_pass.execute(&this.ctx, &mut frame, target.cmd)?;
-            this.depth_prepass.execute(&this.ctx, &mut frame, target.cmd)?;
-            this.present_pass.execute(&this.ctx, &mut frame, target.cmd)?;
-            this.egui_pass.execute(&this.ctx, &mut frame, target.cmd)?;
+            this.clear_pass.execute(&this.ctx, &mut frame)?;
+            this.depth_prepass.execute(&this.ctx, &mut frame)?;
+            this.present_pass.execute(&this.ctx, &mut frame)?;
+            this.egui_pass.execute(&this.ctx, &mut frame)?;
         }
 
         this.frames.submit_frame(&this.ctx)

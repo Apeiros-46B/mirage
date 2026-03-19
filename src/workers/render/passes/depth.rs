@@ -129,7 +129,7 @@ impl DepthPrepass {
     }
 }
 
-impl Task<FrameCtx> for DepthPrepass {
+impl Task<FrameCtx<'_>> for DepthPrepass {
     fn resize(&mut self, ctx: &VulkanCtx, extent: vk::Extent2D) -> anyhow::Result<()> {
         unsafe {
             self.depth_target.destroy(ctx);
@@ -142,8 +142,9 @@ impl Task<FrameCtx> for DepthPrepass {
         &mut self,
         ctx: &VulkanCtx,
         frame: &mut FrameCtx,
-        cmd: vk::CommandBuffer,
     ) -> anyhow::Result<()> {
+        let cmd = frame.in_flight.cmd;
+
         let depth_barrier = vk::ImageMemoryBarrier2::default()
             .image(self.depth_target.img)
             .subresource_range(DEPTH_SUBRES_RANGE)
@@ -172,7 +173,7 @@ impl Task<FrameCtx> for DepthPrepass {
         let rendering_info = vk::RenderingInfo::default()
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent: frame.img.extent,
+                extent: frame.in_flight.img.extent,
             })
             .layer_count(1)
             .depth_attachment(&depth_atmt);

@@ -2,29 +2,28 @@ use ash::vk;
 
 use crate::{
     gpu::{ctx::VulkanCtx, sync::ImageBarrierExt, task::Task},
-    workers::render::frames::RenderImage,
+    workers::render::frames::RenderTarget,
 };
 
-pub struct FrameCtx {
-    pub frame_in_flight_idx: usize, // frame_idx % MAX_FRAMES_IN_FLIGHT
+pub struct FrameCtx<'a> {
+    pub in_flight: RenderTarget<'a>,
     pub frame_idx: usize,
     pub time: f64, // time since engine start
     pub dt: f32, // time since last frame
-    pub img: RenderImage,
-    pub swapchain_base_barrier: vk::ImageMemoryBarrier2<'static>,
 }
 
 pub struct ClearPass;
 
-impl Task<FrameCtx> for ClearPass {
+impl Task<FrameCtx<'_>> for ClearPass {
     unsafe fn execute(
         &mut self,
         ctx: &VulkanCtx,
         frame: &mut FrameCtx,
-        cmd: vk::CommandBuffer,
     ) -> anyhow::Result<()> {
+        let cmd = frame.in_flight.cmd;
+
         unsafe {
-            let barrier = frame.swapchain_base_barrier
+            let barrier = frame.in_flight.base_barrier
                 .old_layout(vk::ImageLayout::UNDEFINED)
                 .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
@@ -35,7 +34,7 @@ impl Task<FrameCtx> for ClearPass {
             ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info());
 
             let color_atmt = vk::RenderingAttachmentInfo::default()
-                .image_view(frame.img.view)
+                .image_view(frame.in_flight.img.view)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .load_op(vk::AttachmentLoadOp::CLEAR)
                 .store_op(vk::AttachmentStoreOp::STORE)
@@ -48,7 +47,7 @@ impl Task<FrameCtx> for ClearPass {
             let rendering_info = vk::RenderingInfo::default()
                 .render_area(vk::Rect2D {
                     offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: frame.img.extent,
+                    extent: frame.in_flight.img.extent,
                 })
                 .layer_count(1)
                 .color_attachments(std::slice::from_ref(&color_atmt));
@@ -63,15 +62,14 @@ impl Task<FrameCtx> for ClearPass {
 
 pub struct PresentPass;
 
-impl Task<FrameCtx> for PresentPass {
+impl Task<FrameCtx<'_>> for PresentPass {
     unsafe fn execute(
         &mut self,
         ctx: &VulkanCtx,
         frame: &mut FrameCtx,
-        cmd: vk::CommandBuffer,
     ) -> anyhow::Result<()> {
         unsafe {
-            let to_present_barrier = frame.swapchain_base_barrier
+            let to_present_barrier = frame.in_flight.base_barrier
                 .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
                 .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
@@ -82,7 +80,7 @@ impl Task<FrameCtx> for PresentPass {
             let dep_info_present = vk::DependencyInfo::default()
                 .image_memory_barriers(std::slice::from_ref(&to_present_barrier));
 
-            ctx.dev.cmd_pipeline_barrier2(cmd, &dep_info_present);
+            ctx.dev.cmd_pipeline_barrier2(frame.in_flight.cmd, &dep_info_present);
         }
 
         Ok(())

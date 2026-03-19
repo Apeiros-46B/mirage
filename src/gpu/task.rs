@@ -12,6 +12,5 @@ pub trait Task<T> {
         &mut self,
         ctx: &VulkanCtx,
         args: &mut T,
-        cmd: vk::CommandBuffer,
     ) -> anyhow::Result<()>;
 }

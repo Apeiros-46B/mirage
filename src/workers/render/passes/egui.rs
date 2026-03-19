@@ -253,14 +253,14 @@ impl EguiPass {
     }
 }
 
-impl Task<FrameCtx> for EguiPass {
+impl Task<FrameCtx<'_>> for EguiPass {
     unsafe fn execute(
         &mut self,
         ctx: &VulkanCtx,
-        args: &mut FrameCtx,
-        cmd: ash::vk::CommandBuffer,
+        frame: &mut FrameCtx,
     ) -> anyhow::Result<()> {
-        let fif = args.frame_in_flight_idx;
+        let cmd = frame.in_flight.cmd;
+        let fif = frame.in_flight.idx;
 
         let mut deltas = egui::TexturesDelta::default();
         mem::swap(&mut self.textures_delta, &mut deltas);
@@ -457,7 +457,7 @@ impl Task<FrameCtx> for EguiPass {
         let mut idx_ofs = 0;
 
         // {{{ upload geometry
-        let base_ofs = args.frame_in_flight_idx * CHUNK_PER_FIF;
+        let base_ofs = fif * CHUNK_PER_FIF;
 
         let mut vert_byte_ofs = base_ofs;
         let mut idx_byte_ofs = base_ofs + IDX_OFS; // indices start halfway
@@ -488,7 +488,7 @@ impl Task<FrameCtx> for EguiPass {
 
         // render to swapchain image
         let color_atmt = vk::RenderingAttachmentInfo::default()
-            .image_view(args.img.view)
+            .image_view(frame.in_flight.img.view)
             .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
             .load_op(vk::AttachmentLoadOp::LOAD) // blend with earlier content
             .store_op(vk::AttachmentStoreOp::STORE);
@@ -496,7 +496,7 @@ impl Task<FrameCtx> for EguiPass {
         let rendering_info = vk::RenderingInfo::default()
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent: args.img.extent,
+                extent: frame.in_flight.img.extent,
             })
             .layer_count(1)
             .color_attachments(std::slice::from_ref(&color_atmt));
@@ -522,8 +522,8 @@ impl Task<FrameCtx> for EguiPass {
         let viewport = vk::Viewport {
             x: 0.0,
             y: 0.0,
-            width: args.img.extent.width as f32,
-            height: args.img.extent.height as f32,
+            width: frame.in_flight.img.extent.width as f32,
+            height: frame.in_flight.img.extent.height as f32,
             min_depth: 0.0,
             max_depth: 1.0,
         };
@@ -532,8 +532,8 @@ impl Task<FrameCtx> for EguiPass {
         }
 
         let push = [
-            args.img.extent.width as f32 / self.px_per_pt,
-            args.img.extent.height as f32 / self.px_per_pt,
+            frame.in_flight.img.extent.width as f32 / self.px_per_pt,
+            frame.in_flight.img.extent.height as f32 / self.px_per_pt,
         ];
         unsafe {
             ctx.dev.cmd_push_constants(
@@ -553,8 +553,8 @@ impl Task<FrameCtx> for EguiPass {
             let max_x = (clip_rect.max.x * self.px_per_pt) as i32;
             let max_y = (clip_rect.max.y * self.px_per_pt) as i32;
 
-            let extent_w = args.img.extent.width as i32;
-            let extent_h = args.img.extent.height as i32;
+            let extent_w = frame.in_flight.img.extent.width as i32;
+            let extent_h = frame.in_flight.img.extent.height as i32;
 
             let clamped_w = (max_x - min_x).max(0).min(extent_w - min_x.max(0));
             let clamped_h = (max_y - min_y).max(0).min(extent_h - min_y.max(0));
