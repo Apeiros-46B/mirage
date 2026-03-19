@@ -9,6 +9,44 @@ use crate::gpu::{GPU, surf::Surface};
 
 const DEV_EXTS: [*const c_char; 1] = [ash::khr::swapchain::NAME.as_ptr()];
 
+pub trait Destroy {
+    /// destroys the Vulkan resource and frees its associated memory
+    /// - must be called only when the GPU is no longer using this resource
+    /// - must be called exactly once
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx);
+}
+
+impl<T: Destroy> Destroy for [T] {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        for item in self.iter_mut() {
+            unsafe {
+                item.destroy(ctx);
+            }
+        }
+    }
+}
+
+impl<T: Destroy> Destroy for Vec<T> {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        for item in self.iter_mut() {
+            unsafe {
+                item.destroy(ctx);
+            }
+        }
+        self.clear();
+    }
+}
+
+impl<T: Destroy> Destroy for Option<T> {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        if let Some(item) = self.as_mut() {
+            unsafe {
+                item.destroy(ctx);
+            }
+        }
+    }
+}
+
 fn create_dev(
     inst: &ash::Instance,
     sel: &GPU,
@@ -106,12 +144,12 @@ impl VulkanCtx {
 
 impl Drop for VulkanCtx {
     fn drop(&mut self) {
-        // entry is dropped by the compiler after this is done
+        // entry is auto dropped AFTER this is called
         unsafe {
             let _ = self.dev.device_wait_idle();
             ManuallyDrop::drop(&mut self.alloc);
             self.dev.destroy_device(None);
-            self.surf.destroy();
+            self.surf.destroy_surf();
             self.inst.destroy_instance(None);
         }
     }

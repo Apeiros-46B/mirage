@@ -1,8 +1,8 @@
 use ash::vk;
 
-use crate::gpu::ctx::VulkanCtx;
+use crate::gpu::ctx::{Destroy, VulkanCtx};
 
-pub trait Task<T> {
+pub trait Task<T>: Destroy {
     fn resize(&mut self, _ctx: &VulkanCtx, _extent: vk::Extent2D) -> anyhow::Result<()> {
         Ok(())
     }

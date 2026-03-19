@@ -3,7 +3,10 @@ use std::{ops::{Index, IndexMut}, slice::{Iter, IterMut}, sync::Arc};
 use ash::{khr, vk};
 use winit::dpi::PhysicalSize;
 
-use crate::{gpu::{arena::GPUArena, ctx::VulkanCtx}, util::array_try_from_fn};
+use crate::{
+    gpu::{arena::GPUArena, ctx::{Destroy, VulkanCtx}},
+    util::array_try_from_fn,
+};
 
 pub const FRAMES_IN_FLIGHT: usize = 2;
 const SWAPCHAIN_MIN_IMGS: u32 = 3;
@@ -33,8 +36,8 @@ pub struct FrameData {
     pub in_flight_fence: vk::Fence,
 }
 
-impl FrameData {
-    pub unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+impl Destroy for FrameData {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
         unsafe {
             ctx.dev.destroy_semaphore(self.img_available_sem, None);
             ctx.dev.destroy_fence(self.in_flight_fence, None);
@@ -56,6 +59,16 @@ struct SwapchainImage {
     // waited on by `present` before displaying
     render_sem: vk::Semaphore,
 }
+
+impl Destroy for SwapchainImage {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        unsafe {
+            // don't destroy img.img because it's owned by the swapchain
+            ctx.dev.destroy_semaphore(self.render_sem, None);
+            ctx.dev.destroy_image_view(self.view, None);
+        }
+    }
+}
 // }}}
 
 // {{{ swapchain
@@ -70,6 +83,18 @@ pub struct Swapchain {
     // index of the image currently being rendered into
     // None between present() and the next acq_next_img()
     img_idx: Option<u32>,
+}
+
+impl Destroy for Swapchain {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        unsafe {
+            std::mem::take(&mut self.imgs).destroy(ctx);
+            if self.handle != vk::SwapchainKHR::null() {
+                self.loader.destroy_swapchain(self.handle, None);
+                self.handle = vk::SwapchainKHR::null();
+            }
+        }
+    }
 }
 
 impl Swapchain {
@@ -87,16 +112,6 @@ impl Swapchain {
 
         s.recreate(ctx, size)?;
         Ok(s)
-    }
-
-    pub unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
-        unsafe {
-            Self::destroy_imgs(ctx, std::mem::take(&mut self.imgs));
-            if self.handle != vk::SwapchainKHR::null() {
-                self.loader.destroy_swapchain(self.handle, None);
-                self.handle = vk::SwapchainKHR::null();
-            }
-        }
     }
 
     // returns false if size is zero (minimized)
@@ -143,10 +158,10 @@ impl Swapchain {
             })?;
 
         let old_handle = std::mem::replace(&mut self.handle, new_handle);
-        let old_imgs = std::mem::replace(&mut self.imgs, new_imgs);
+        let mut old_imgs = std::mem::replace(&mut self.imgs, new_imgs);
 
         unsafe {
-            Self::destroy_imgs(ctx, old_imgs);
+            old_imgs.destroy(ctx);
             if old_handle != vk::SwapchainKHR::null() {
                 self.loader.destroy_swapchain(old_handle, None);
             }
@@ -264,12 +279,12 @@ impl Swapchain {
         handle: vk::SwapchainKHR,
         fmt: vk::Format,
     ) -> anyhow::Result<Vec<SwapchainImage>> {
-        let imgs = unsafe { loader.get_swapchain_images(handle)? };
-        let mut out = Vec::with_capacity(imgs.len());
+        let raw = unsafe { loader.get_swapchain_images(handle)? };
+        let mut imgs = Vec::with_capacity(raw.len());
 
         // try block would be nice here
         let result = (|| -> anyhow::Result<()> {
-            for img in imgs {
+            for img in raw {
                 let view = unsafe {
                     ctx.dev.create_image_view(
                         &vk::ImageViewCreateInfo::default()
@@ -283,26 +298,16 @@ impl Swapchain {
                 let render_sem = unsafe {
                     ctx.dev.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?
                 };
-                out.push(SwapchainImage { img, view, render_sem });
+                imgs.push(SwapchainImage { img, view, render_sem });
             }
             Ok(())
         })();
 
         match result {
-            Ok(()) => Ok(out),
+            Ok(()) => Ok(imgs),
             Err(e) => {
-                unsafe { Self::destroy_imgs(ctx, out); }
+                unsafe { imgs.destroy(ctx); }
                 Err(e)
-            }
-        }
-    }
-
-    unsafe fn destroy_imgs(ctx: &VulkanCtx, imgs: Vec<SwapchainImage>) {
-        for img in imgs {
-            unsafe {
-                // don't destroy img.img because it's owned by the swapchain
-                ctx.dev.destroy_semaphore(img.render_sem, None);
-                ctx.dev.destroy_image_view(img.view, None);
             }
         }
     }
@@ -327,6 +332,16 @@ pub struct FrameManager {
 
     resize_requested: bool,
     inner_surf_sz: (u32, u32),
+}
+
+impl Destroy for FrameManager {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        unsafe {
+            self.swapchain.destroy(ctx);
+            self.frames.destroy(ctx);
+            ctx.dev.destroy_command_pool(self.cmd_pool, None);
+        }
+    }
 }
 
 impl FrameManager {
@@ -368,16 +383,6 @@ impl FrameManager {
             frames,
             cmd_pool,
         })
-    }
-
-    pub unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
-        unsafe {
-            self.swapchain.destroy(ctx);
-            for frame in &mut self.frames {
-                frame.destroy(ctx);
-            }
-            ctx.dev.destroy_command_pool(self.cmd_pool, None);
-        }
     }
 
     pub fn begin_frame(
@@ -508,6 +513,16 @@ impl<T> PerFrame<T> {
 
     pub fn iter_mut(&mut self) -> IterMut<'_, T> {
         self.items.iter_mut()
+    }
+}
+
+impl<T: Destroy> Destroy for PerFrame<T> {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        for item in self.iter_mut() {
+            unsafe {
+                item.destroy(ctx);
+            }
+        }
     }
 }
 

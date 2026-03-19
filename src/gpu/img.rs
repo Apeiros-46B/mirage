@@ -1,7 +1,7 @@
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme};
 
-use crate::gpu::ctx::VulkanCtx;
+use crate::gpu::ctx::{Destroy, VulkanCtx};
 
 pub struct AllocatedImage {
     pub img: vk::Image,
@@ -9,6 +9,18 @@ pub struct AllocatedImage {
     pub mem: Option<Allocation>,
     pub fmt: vk::Format,
     pub extent: vk::Extent3D,
+}
+
+impl Destroy for AllocatedImage {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        unsafe {
+            ctx.dev.destroy_image_view(self.view, None);
+            ctx.dev.destroy_image(self.img, None);
+        }
+        if let Some(mem) = self.mem.take() {
+            ctx.alloc.lock().unwrap().free(mem).unwrap();
+        }
+    }
 }
 
 impl AllocatedImage {
@@ -59,15 +71,5 @@ impl AllocatedImage {
             fmt,
             extent
         })
-    }
-
-    pub unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
-        unsafe {
-            ctx.dev.destroy_image_view(self.view, None);
-            ctx.dev.destroy_image(self.img, None);
-        }
-        if let Some(mem) = self.mem.take() {
-            ctx.alloc.lock().unwrap().free(mem).unwrap();
-        }
     }
 }

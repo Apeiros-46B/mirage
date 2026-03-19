@@ -5,7 +5,7 @@ use ash::vk;
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    gpu::{ctx::VulkanCtx, task::Task},
+    gpu::{ctx::{Destroy, VulkanCtx}, task::Task},
     sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
 };
 use super::msgs::{
@@ -24,7 +24,7 @@ use passes::{
 use frames::FrameManager;
 
 pub struct RendererState {
-    frames: FrameManager,
+    manager: FrameManager,
 
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
@@ -40,7 +40,9 @@ impl Drop for RendererState {
         // ctx is dropped by the compiler after this is done
         unsafe {
             let _ = self.ctx.dev.device_wait_idle();
-            self.frames.destroy(&self.ctx);
+            self.depth_prepass.destroy(&self.ctx);
+            self.egui_pass.destroy(&self.ctx);
+            self.manager.destroy(&self.ctx);
         }
     }
 }
@@ -57,15 +59,15 @@ impl Worker for Renderer {
         let ctx = init.ctx;
         let app_tx = init.app_tx;
         let extent = vk::Extent2D { width: init.sz.width, height: init.sz.height };
-        let frames = FrameManager::new(ctx.clone(), init.sz)?;
+        let manager = FrameManager::new(ctx.clone(), init.sz)?;
 
         let clear_pass = ClearPass;
         let depth_prepass = DepthPrepass::new(&ctx, extent)?;
         let present_pass = PresentPass;
-        let egui_pass = EguiPass::new(&ctx, frames.swapchain.fmt)?;
+        let egui_pass = EguiPass::new(&ctx, manager.swapchain.fmt)?;
 
         Ok(RendererState {
-            frames,
+            manager,
             clear_pass,
             depth_prepass,
             present_pass,
@@ -85,8 +87,8 @@ impl Worker for Renderer {
 
         this.app_tx.telemetry.send(RendererTelemetry { frame_time: dt });
 
-        let Some(target) = this.frames.begin_frame(&this.ctx)? else {
-            if this.frames.is_minimized() {
+        let Some(target) = this.manager.begin_frame(&this.ctx)? else {
+            if this.manager.is_minimized() {
                 // sleep to avoid busy wait
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -114,14 +116,14 @@ impl Worker for Renderer {
             this.egui_pass.execute(&this.ctx, &mut frame)?;
         }
 
-        this.frames.submit_frame(&this.ctx)
+        this.manager.submit_frame(&this.ctx)
     }
 }
 
 impl MessageHandler<RendererMsg> for RendererState {
     fn handle(&mut self, msg: RendererMsg) {
         match msg {
-            RendererMsg::Resized(sz) => self.frames.request_resize(sz),
+            RendererMsg::Resized(sz) => self.manager.request_resize(sz),
         }
     }
 }

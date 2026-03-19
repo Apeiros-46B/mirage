@@ -1,6 +1,14 @@
 use ash::vk;
 
-use crate::gpu::{ctx::VulkanCtx, img::AllocatedImage, task::Task};
+use crate::{
+    gpu::{
+        ctx::{Destroy, VulkanCtx},
+        img::AllocatedImage,
+        sync::ImageBarrierExt,
+        task::Task,
+    },
+    workers::render::frames::PerFrame,
+};
 use super::frame::FrameCtx;
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/depth-prepass.spv"));
@@ -16,19 +24,18 @@ const DEPTH_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange 
 pub struct DepthPrepass {
     pipeline: vk::Pipeline,
     layout: vk::PipelineLayout,
-    depth_target: AllocatedImage,
+    depth_targets: PerFrame<AllocatedImage>,
     world_bda: u64,
 }
 
-fn make_depth_target(ctx: &VulkanCtx, extent: vk::Extent2D) -> anyhow::Result<AllocatedImage> {
-    AllocatedImage::new(
-        ctx,
-        extent.into(),
-        vk::Format::D32_SFLOAT,
-        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        DEPTH_SUBRES_RANGE,
-        "depth_prepass_out",
-    )
+impl Destroy for DepthPrepass {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        unsafe {
+            ctx.dev.destroy_pipeline_layout(self.layout, None);
+            ctx.dev.destroy_pipeline(self.pipeline, None);
+            self.depth_targets.destroy(ctx);
+        }
+    }
 }
 
 impl DepthPrepass {
@@ -118,12 +125,12 @@ impl DepthPrepass {
         // don't need it anymore
         unsafe { ctx.dev.destroy_shader_module(module, None); }
 
-        let depth_target = make_depth_target(ctx, extent)?;
+        let depth_targets = PerFrame::try_init(|_| make_depth_target(ctx, extent))?;
 
         Ok(Self {
             pipeline,
             layout,
-            depth_target,
+            depth_targets,
             world_bda: 0,
         })
     }
@@ -131,10 +138,12 @@ impl DepthPrepass {
 
 impl Task<FrameCtx<'_>> for DepthPrepass {
     fn resize(&mut self, ctx: &VulkanCtx, extent: vk::Extent2D) -> anyhow::Result<()> {
-        unsafe {
-            self.depth_target.destroy(ctx);
+        for target in self.depth_targets.iter_mut() {
+            unsafe {
+                target.destroy(ctx);
+            }
+            *target = make_depth_target(ctx, extent)?;
         }
-        self.depth_target = make_depth_target(ctx, extent)?;
         Ok(())
     }
 
@@ -144,25 +153,23 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
         frame: &mut FrameCtx,
     ) -> anyhow::Result<()> {
         let cmd = frame.in_flight.cmd;
+        let fif = frame.in_flight.idx;
 
-        let depth_barrier = vk::ImageMemoryBarrier2::default()
-            .image(self.depth_target.img)
+        let mut barrier = vk::ImageMemoryBarrier2::default()
+            .image(self.depth_targets[fif].img)
             .subresource_range(DEPTH_SUBRES_RANGE)
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-            .src_stage_mask(vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS)
+            .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
             .dst_stage_mask(vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS)
             .src_access_mask(vk::AccessFlags2::NONE)
             .dst_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE);
 
-        let dep = vk::DependencyInfo::default()
-            .image_memory_barriers(std::slice::from_ref(&depth_barrier));
-
-        unsafe { ctx.dev.cmd_pipeline_barrier2(cmd, &dep) };
+        unsafe { ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info()) };
 
         // render depth only, cleared to 1.0
         let depth_atmt = vk::RenderingAttachmentInfo::default()
-            .image_view(self.depth_target.view)
+            .image_view(self.depth_targets[fif].view)
             .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)
@@ -193,21 +200,25 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
             ctx.dev.cmd_end_rendering(cmd);
         }
 
-        let compute_read_barrier = vk::ImageMemoryBarrier2::default()
-            .image(self.depth_target.img)
-            .subresource_range(DEPTH_SUBRES_RANGE)
-            .old_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .src_stage_mask(vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS)
-            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-            .src_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
-            .dst_access_mask(vk::AccessFlags2::SHADER_READ);
+        barrier = barrier.next_phase(
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        );
 
-        let dep = vk::DependencyInfo::default()
-            .image_memory_barriers(std::slice::from_ref(&compute_read_barrier));
-
-        unsafe { ctx.dev.cmd_pipeline_barrier2(cmd, &dep); }
+        unsafe { ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info()); }
 
         Ok(())
     }
+}
+
+fn make_depth_target(ctx: &VulkanCtx, extent: vk::Extent2D) -> anyhow::Result<AllocatedImage> {
+    AllocatedImage::new(
+        ctx,
+        extent.into(),
+        vk::Format::D32_SFLOAT,
+        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+        DEPTH_SUBRES_RANGE,
+        "depth_prepass_out",
+    )
 }

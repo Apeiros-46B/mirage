@@ -5,7 +5,12 @@ use egui::{ClippedPrimitive, TextureId, TexturesDelta, epaint::Vertex};
 use winit::dpi::PhysicalSize;
 
 use crate::{
-    gpu::{ctx::VulkanCtx, img::AllocatedImage, sync::ImageBarrierExt, task::Task},
+    gpu::{
+        ctx::{Destroy, VulkanCtx},
+        img::AllocatedImage,
+        sync::ImageBarrierExt,
+        task::Task,
+    },
     workers::{msgs::EguiUpdate, render::frames::PerFrame},
 };
 use super::frame::FrameCtx;
@@ -26,8 +31,28 @@ pub struct EguiPass {
     desc_pool: vk::DescriptorPool,
     sampler: vk::Sampler,
 
+    // images are guaranteed to never exist in both of these collections at once
     textures: HashMap<TextureId, (AllocatedImage, vk::DescriptorSet)>,
-    pending_frees: PerFrame<Vec<AllocatedImage>>,
+    unused_textures: PerFrame<Vec<AllocatedImage>>,
+    unused_desc_sets: PerFrame<Vec<vk::DescriptorSet>>,
+}
+
+impl Destroy for EguiPass {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        unsafe {
+            ctx.dev.destroy_descriptor_set_layout(self.desc_set_layout, None);
+            ctx.dev.destroy_descriptor_pool(self.desc_pool, None);
+            ctx.dev.destroy_pipeline_layout(self.pipeline_layout, None);
+            ctx.dev.destroy_pipeline(self.pipeline, None);
+            ctx.dev.destroy_sampler(self.sampler, None);
+
+            // descriptor sets are implicitly destroyed already
+            self.unused_textures.destroy(ctx);
+            for (img, _) in self.textures.values_mut() {
+                img.destroy(ctx);
+            }
+        }
+    }
 }
 
 impl EguiPass {
@@ -64,6 +89,7 @@ impl EguiPass {
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(1024);
         let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
             .pool_sizes(std::slice::from_ref(&pool_size))
             .max_sets(1024);
         let desc_pool = unsafe { ctx.dev.create_descriptor_pool(&pool_info, None)? };
@@ -197,7 +223,8 @@ impl EguiPass {
             sampler,
 
             textures: HashMap::new(),
-            pending_frees: PerFrame::init(|_| Vec::new()),
+            unused_textures: PerFrame::init(|_| Vec::new()),
+            unused_desc_sets: PerFrame::init(|_| Vec::new()),
         })
     }
 
@@ -222,13 +249,21 @@ impl Task<FrameCtx<'_>> for EguiPass {
         mem::swap(&mut self.textures_delta, &mut deltas);
 
         // clean up resources from finished draws
-        for mut img in self.pending_frees[fif].drain(..) {
-            unsafe { img.destroy(ctx); }
+        unsafe {
+            self.unused_textures[fif].destroy(ctx);
+            if !self.unused_desc_sets[fif].is_empty() {
+                ctx.dev.free_descriptor_sets(
+                    self.desc_pool,
+                    &self.unused_desc_sets[fif],
+                )?;
+                self.unused_desc_sets[fif].clear();
+            }
         }
 
         for id in deltas.free {
-            if let Some((img, _set)) = self.textures.remove(&id) {
-                self.pending_frees[fif].push(img);
+            if let Some((img, set)) = self.textures.remove(&id) {
+                self.unused_textures[fif].push(img);
+                self.unused_desc_sets[fif].push(set);
             }
         }
 

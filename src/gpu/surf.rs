@@ -36,7 +36,8 @@ impl Surface {
         })
     }
 
-    pub unsafe fn destroy(&mut self) {
+    // not a Destroy impl because this is part of the VulkanCtx
+    pub unsafe fn destroy_surf(&mut self) {
         unsafe {
             self.loader.destroy_surface(self.handle, None);
         }
