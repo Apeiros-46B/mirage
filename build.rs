@@ -15,6 +15,11 @@ fn main() {
         let entry = entry.unwrap();
         let path = entry.path();
 
+        if path.components().nth(1).unwrap().as_os_str() == "shared" {
+            // don't compile shared files as standalone shaders
+            continue;
+        }
+
         if path.extension().and_then(|s| s.to_str()) == Some("slang") {
             let file_stem = path.file_stem().unwrap().to_str().unwrap();
             let out_file = out_path.join(format!("{}.spv", file_stem));

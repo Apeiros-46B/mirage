@@ -11,11 +11,11 @@ use ash::vk;
 use crate::gpu::surf::Surface;
 
 #[derive(Clone, Copy)]
-pub struct MappedBuffer(pub *mut u8);
+pub struct MappedPtr(pub *mut u8);
 
 // safety: we only ever access the MappedBuffer from a single thread
-unsafe impl Send for MappedBuffer {}
-unsafe impl Sync for MappedBuffer {}
+unsafe impl Send for MappedPtr {}
+unsafe impl Sync for MappedPtr {}
 
 
 #[derive(Debug, Clone)]

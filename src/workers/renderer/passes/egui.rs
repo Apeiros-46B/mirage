@@ -277,16 +277,11 @@ impl Task<FrameCtx<'_>> for EguiPass {
             };
 
             let staging_sz = pixels.len() as u64;
-
-            let (
-                staging_buf,
-                staging_ofs,
-                staging_ptr
-            ) = frame.in_flight.alloc.alloc(staging_sz, 16);
+            let staging = frame.in_flight.arena.alloc(staging_sz, 16);
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     pixels.as_ptr(),
-                    staging_ptr.0,
+                    staging.ptr.0,
                     pixels.len(),
                 );
             }
@@ -298,7 +293,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
                 .layer_count(1);
 
             let copy_region = vk::BufferImageCopy::default()
-                .buffer_offset(staging_ofs)
+                .buffer_offset(staging.ofs)
                 .image_subresource(vk::ImageSubresourceLayers {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     mip_level: 0,
@@ -334,7 +329,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
 
                     ctx.dev.cmd_copy_buffer_to_image(
                         cmd,
-                        staging_buf,
+                        staging.buf,
                         img.img,
                         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                         std::slice::from_ref(&copy_region),
@@ -376,7 +371,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
                     ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info());
                     ctx.dev.cmd_copy_buffer_to_image(
                         cmd,
-                        staging_buf,
+                        staging.buf,
                         img.img,
                         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                         std::slice::from_ref(&copy_region),
@@ -435,14 +430,10 @@ impl Task<FrameCtx<'_>> for EguiPass {
             }
         }
 
-        let (geom_buf, vbo_ofs, mut vert_ptr) = frame.in_flight.alloc.alloc(
-            total_vert_sz as u64,
-            16,
-        );
-        let (_, ibo_ofs, mut idx_ptr) = frame.in_flight.alloc.alloc(
-            total_idx_sz as u64,
-            16,
-        );
+        let vbo = frame.in_flight.arena.alloc(total_vert_sz as u64, 16);
+        let ibo = frame.in_flight.arena.alloc(total_idx_sz as u64, 16);
+        let mut vert_ptr = vbo.ptr.0;
+        let mut idx_ptr = ibo.ptr.0;
 
         // copy geometry sequentially
         for ClippedPrimitive { primitive, .. } in &self.primitives {
@@ -454,17 +445,17 @@ impl Task<FrameCtx<'_>> for EguiPass {
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     mesh.vertices.as_ptr() as *const u8,
-                    vert_ptr.0,
+                    vert_ptr,
                     vert_sz,
                 );
                 std::ptr::copy_nonoverlapping(
                     mesh.indices.as_ptr() as *const u8,
-                    idx_ptr.0,
+                    idx_ptr,
                     idx_sz,
                 );
 
-                vert_ptr.0 = vert_ptr.0.add(vert_sz);
-                idx_ptr.0 = idx_ptr.0.add(idx_sz);
+                vert_ptr = vert_ptr.add(vert_sz);
+                idx_ptr = idx_ptr.add(idx_sz);
             }
         }
         // }}}
@@ -493,13 +484,8 @@ impl Task<FrameCtx<'_>> for EguiPass {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline,
             );
-            ctx.dev.cmd_bind_vertex_buffers(cmd, 0, &[geom_buf], &[vbo_ofs]);
-            ctx.dev.cmd_bind_index_buffer(
-                cmd,
-                geom_buf,
-                ibo_ofs,
-                vk::IndexType::UINT32,
-            );
+            ctx.dev.cmd_bind_vertex_buffers(cmd, 0, &[vbo.buf], &[vbo.ofs]);
+            ctx.dev.cmd_bind_index_buffer(cmd, ibo.buf, ibo.ofs, vk::IndexType::UINT32);
         }
 
         let viewport = vk::Viewport {

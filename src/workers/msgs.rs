@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
+use bytemuck::{Pod, Zeroable};
 use egui::{ClippedPrimitive, TexturesDelta};
+use glam::{Mat4, Vec3};
 use winit::{
     dpi::PhysicalSize,
     event::{ElementState, MouseButton},
@@ -8,6 +10,17 @@ use winit::{
 };
 
 use crate::sync::worker::channel_routing_for;
+
+// matches shared/camera.slang::CameraState
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+#[repr(C)]
+pub struct CameraState {
+    pub view_proj: Mat4,
+    pub inv_proj: Mat4,
+    pub inv_view: Mat4,
+    pub pos: Vec3,
+    pub _pad: f32,
+}
 
 pub enum AppMsg {
     SetCursorCapture(bool),

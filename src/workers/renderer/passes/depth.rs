@@ -47,7 +47,7 @@ impl DepthPrepass {
         let push_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .offset(0)
-            .size(72); // mat4 (64 bytes) + u64 world_bda (8 bytes)
+            .size(16); // camera ptr (8 bytes) + world ptr (8 bytes)
 
         let layout_info = vk::PipelineLayoutCreateInfo::default()
             .push_constant_ranges(std::slice::from_ref(&push_range));
@@ -188,6 +188,14 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
             ctx.dev.cmd_begin_rendering(cmd, &rendering_info);
             ctx.dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
 
+            ctx.dev.cmd_push_constants(
+                cmd,
+                self.layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                bytemuck::bytes_of(&[frame.camera_bda, self.world_bda]),
+            );
+
             // hardcoded single chunk, vsh calculates cube corners using gl_VertexIndex
             //
             // later when chunks are dynamically loaded and culled, direct draw is replaced by
@@ -202,7 +210,7 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
         barrier = barrier.next_phase(
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             vk::PipelineStageFlags2::COMPUTE_SHADER,
-            vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            vk::AccessFlags2::SHADER_READ,
         );
 
         unsafe { ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info()); }

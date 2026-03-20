@@ -10,15 +10,13 @@ use crate::{
     gpu::{ctx::{Destroy, VulkanCtx}, task::Task},
     sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
 };
-use super::{
-    game::camera::ThinCamera,
-    msgs::{
-        EguiUpdate,
-        RendererMsg,
-        RendererRxBundle,
-        RendererTelemetry,
-        RendererToApp,
-    },
+use super::msgs::{
+    CameraState,
+    EguiUpdate,
+    RendererMsg,
+    RendererRxBundle,
+    RendererTelemetry,
+    RendererToApp,
 };
 use passes::{
     depth::DepthPrepass,
@@ -31,7 +29,7 @@ pub struct RendererInit {
     pub sz: PhysicalSize<u32>,
     pub ctx: Arc<VulkanCtx>,
     pub app_tx: RendererToApp,
-    pub camera_rx: Output<ThinCamera>,
+    pub camera_rx: Output<CameraState>,
 }
 
 pub struct RendererState {
@@ -43,7 +41,7 @@ pub struct RendererState {
     egui_pass: EguiPass,
 
     app_tx: RendererToApp,
-    camera_rx: Output<ThinCamera>,
+    camera_rx: Output<CameraState>,
     ctx: Arc<VulkanCtx>,
 }
 
@@ -67,7 +65,8 @@ pub struct FrameCtx<'a> {
     pub frame_idx: usize,
     pub time: f64, // time since engine start
     pub dt: f32, // time since last frame
-    pub camera: ThinCamera,
+
+    pub camera_bda: u64, // pointer to CameraState
 }
 
 impl Worker for Renderer {
@@ -122,12 +121,15 @@ impl Worker for Renderer {
             this.egui_pass.resize(&this.ctx, target.img.extent)?;
         }
 
+        let mut camera = target.arena.alloc_of::<CameraState>();
+        unsafe { camera.write(this.camera_rx.read()); }
+
         let mut frame = FrameCtx {
             in_flight: target,
             frame_idx: tick,
             time: since_wake.as_secs_f64(),
             dt,
-            camera: *this.camera_rx.read(),
+            camera_bda: camera.bda,
         };
 
         unsafe {

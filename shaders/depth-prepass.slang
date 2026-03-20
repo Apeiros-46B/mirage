@@ -1,5 +1,7 @@
+import shared.camera;
+
 struct PushConstants {
-	float4x4 viewProj;
+	CameraState* camera;
 	uint64_t worldBda;
 };
 
@@ -28,7 +30,7 @@ float4 vsh(uint vertexID : SV_VertexID) : SV_Position {
 
 	// do real world position later
 	float3 worldPos = localPos + float3(0.0, 0.0, 0.0);
-	return mul(push.viewProj, float4(worldPos, 1.0));
+	return mul(push.camera.viewProj, float4(worldPos, 1.0));
 }
 
 [shader("fragment")]

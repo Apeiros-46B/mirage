@@ -10,8 +10,8 @@ use crate::{sync::{
     chan::SafeSend,
     worker::{MessageHandler, Worker, WorkerControl, WorkerExt},
 }, workers::msgs::AppMsg};
-use super::msgs::{GameMsg, GameRxBundle, GameTelemetry, GameToApp};
-use camera::{Camera, ThinCamera};
+use super::msgs::{CameraState, GameMsg, GameRxBundle, GameTelemetry, GameToApp};
+use camera::Camera;
 use input::InputState;
 
 pub trait Polled {
@@ -22,14 +22,14 @@ pub trait Polled {
 pub struct GameInit {
     pub sz: PhysicalSize<u32>,
     pub app_tx: GameToApp,
-    pub camera_tx: Input<ThinCamera>,
+    pub camera_tx: Input<CameraState>,
 }
 
 pub struct GameState {
     input: InputState,
     camera: Camera,
     app_tx: GameToApp,
-    camera_tx: Input<ThinCamera>
+    camera_tx: Input<CameraState>
 }
 
 #[derive(Default)]
@@ -65,7 +65,7 @@ impl Worker for Game {
         this.camera.poll(&mut this.input, dt);
         this.input.reset_keys();
 
-        this.camera_tx.write(this.camera.thin());
+        this.camera_tx.write(this.camera.get_state());
 
         Ok(())
     }
