@@ -2,15 +2,8 @@ use ash::vk;
 
 use crate::{
     gpu::{ctx::{Destroy, VulkanCtx}, sync::ImageBarrierExt, task::Task},
-    workers::render::frames::RenderTarget,
+    workers::renderer::FrameCtx,
 };
-
-pub struct FrameCtx<'a> {
-    pub in_flight: RenderTarget<'a>,
-    pub frame_idx: usize,
-    pub time: f64, // time since engine start
-    pub dt: f32, // time since last frame
-}
 
 pub struct ClearPass;
 

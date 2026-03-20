@@ -7,9 +7,8 @@ use crate::{
         sync::ImageBarrierExt,
         task::Task,
     },
-    workers::render::frames::PerFrame,
+    workers::renderer::{FrameCtx, frames::PerFrame},
 };
-use super::frame::FrameCtx;
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/depth-prepass.spv"));
 

@@ -1,49 +1,49 @@
 use std::{sync::Arc, time::{Duration, Instant}};
 
+use triple_buffer::triple_buffer;
 use winit::{
     application::ApplicationHandler,
     event::{DeviceEvent, DeviceId, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow},
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
-    window::{Window, WindowAttributes, WindowId}
+    window::{CursorGrabMode, Window, WindowAttributes, WindowId}
 };
 
 use crate::{
     gpu::ctx::VulkanCtx,
     sync::{
         chan::SafeSend,
-        worker::{WorkerExt, WorkerHandle},
+        worker::{MessageHandler, WorkerExt, WorkerHandle},
     },
     ui::{UIResponse, UIState, ui_main},
     workers::{
-        game::Game,
+        game::{Game, GameInit},
         msgs::{
-            AppRxBundle,
-            AppTxBundle,
-            EguiUpdate,
-            GameInit,
-            GameMsg,
-            RendererInit,
-            RendererMsg,
+            AppMsg, AppRxBundle, AppTxBundle, EguiUpdate, GameMsg, GameTelemetry, RendererMsg, RendererTelemetry
         },
-        render::Renderer,
+        renderer::{Renderer, RendererInit},
     }
 };
 
-pub struct App {
-    initialised: bool,
+pub struct AppState {
+    ui: UIState,
+    win: Arc<Window>,
+    egui: egui_winit::State,
+}
 
-    ui_state: UIState,
+pub struct App {
+    state: Option<AppState>,
+
     egui_ctx: egui::Context,
-    egui_state: Option<egui_winit::State>,
     egui_pending_textures: egui::TexturesDelta,
     next_redraw: Instant,
-
-    win: Option<Arc<Window>>,
 
     rx: Option<AppRxBundle>,
     game: WorkerHandle<Game>,
     renderer: WorkerHandle<Renderer>,
+
+    // keep window alive
+    _win: Option<Arc<Window>>,
 }
 
 impl App {
@@ -51,19 +51,17 @@ impl App {
         let egui_ctx = egui::Context::default();
 
         Self {
-            initialised: false,
+            state: None,
 
-            ui_state: Default::default(),
             egui_ctx,
-            egui_state: None,
             egui_pending_textures: Default::default(),
             next_redraw: Instant::now(),
-
-            win: None,
 
             rx: None,
             game: Game::spawn(),
             renderer: Renderer::spawn(),
+
+            _win: None,
         }
     }
 
@@ -78,15 +76,19 @@ impl App {
         let (mut tx, rx) = AppTxBundle::new_pair();
         self.rx = Some(rx);
 
+        let (camera_tx, camera_rx) = triple_buffer(&Default::default());
+
         self.renderer.resume(RendererInit {
             sz: win.inner_size(),
             ctx: Arc::new(ctx),
             app_tx: tx.take_renderer().unwrap(),
+            camera_rx,
         });
 
         self.game.resume(GameInit {
             sz: win.inner_size(),
             app_tx: tx.take_game().unwrap(),
+            camera_tx,
         });
     }
 
@@ -96,25 +98,23 @@ impl App {
     }
 
     fn redraw(&mut self, evt_loop: &ActiveEventLoop) {
-        let Some(win) = &self.win else { return };
+        let Some(this) = &mut self.state else { return };
 
-        let sz = win.inner_size();
+        let sz = this.win.inner_size();
         if sz.width == 0 || sz.height == 0 {
             // we are minimized, don't do anything
             return;
         }
 
-        let Some(egui_state) = &mut self.egui_state else { return };
-
-        let raw_input = egui_state.take_egui_input(win);
+        let raw_input = this.egui.take_egui_input(&this.win);
 
         let mut resp = UIResponse::default();
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
-            ui_main(&self.ui_state, &mut resp, ctx);
+            ui_main(&this.ui, &mut resp, ctx);
         });
         resp.handle(evt_loop);
-        egui_state.handle_platform_output(
-            win,
+        this.egui.handle_platform_output(
+            &this.win,
             full_output.platform_output,
         );
 
@@ -142,43 +142,47 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, evt_loop: &ActiveEventLoop) {
-        if self.initialised {
+        if self.state.is_some() {
             return;
         }
-        self.initialised = true;
 
         let win = Arc::new(evt_loop
             .create_window(WindowAttributes::default())
             .expect("failed to open window"),
         );
-        self.win = Some(win.clone());
-        self.egui_state = Some(egui_winit::State::new(
+        let egui = egui_winit::State::new(
             self.egui_ctx.clone(),
             egui::ViewportId::ROOT,
             &win,
             Some(win.scale_factor() as f32),
             None,
             None,
-        ));
+        );
 
+        self.state = Some(AppState {
+            ui: Default::default(),
+            win: win.clone(),
+            egui,
+        });
+        self._win = Some(win.clone());
         self.resume_workers(win);
     }
 
     fn about_to_wait(&mut self, evt_loop: &ActiveEventLoop) {
+        let Some(this) = &mut self.state else { return };
+
         // handle incoming messages
         if let Some(rx) = &mut self.rx {
-            rx.drain_all(&mut self.ui_state);
+            rx.drain_all(this);
         }
 
+        // ~60Hz UI processing
+        // check time in case we woke up early from events
         let now = Instant::now();
         if now >= self.next_redraw {
-            if let Some(win) = self.win.as_ref() {
-                win.request_redraw();
-            }
-            // ~60Hz UI processing
+            this.win.request_redraw();
             self.next_redraw = now + Duration::from_secs_f64(1.0 / 60.0);
         }
-
         evt_loop.set_control_flow(ControlFlow::WaitUntil(self.next_redraw));
     }
 
@@ -188,15 +192,8 @@ impl ApplicationHandler for App {
         _win_id: WindowId,
         evt: WindowEvent,
     ) {
-        let Some(win) = self.win.as_ref() else {
-            return;
-        };
-
-        let mut consumed = false;
-        if let Some(egui_state) = &mut self.egui_state {
-            let res = egui_state.on_window_event(win, &evt);
-            consumed = res.consumed;
-        }
+        let Some(this) = &mut self.state else { return };
+        let egui_res = this.egui.on_window_event(&this.win, &evt);
 
         match evt {
             WindowEvent::CloseRequested => evt_loop.exit(),
@@ -207,14 +204,38 @@ impl ApplicationHandler for App {
                 }
                 self.renderer.tx.send(RendererMsg::Resized(sz));
             },
+            WindowEvent::CursorMoved { position, .. } => {
+                if egui_res.consumed {
+                    return;
+                }
+                if self.egui_ctx.wants_pointer_input() {
+                    return;
+                }
+                if self.egui_ctx.is_pointer_over_area() {
+                    return;
+                }
+                self.game.tx.send(GameMsg::CursorMotion(
+                    position.x as f32,
+                    position.y as f32
+                ));
+            }
             WindowEvent::MouseInput { state, button, .. } => {
-                if consumed {
+                if egui_res.consumed {
+                    return;
+                }
+                if self.egui_ctx.wants_pointer_input() {
+                    return;
+                }
+                if self.egui_ctx.is_pointer_over_area() {
                     return;
                 }
                 self.game.tx.send(GameMsg::MouseClick(button, state));
             }
             WindowEvent::KeyboardInput { event: k_evt, .. } => {
-                if consumed || k_evt.repeat {
+                if egui_res.consumed || k_evt.repeat {
+                    return;
+                }
+                if self.egui_ctx.wants_keyboard_input() {
                     return;
                 }
                 self.game.tx.send(GameMsg::KeyPress(k_evt.physical_key, k_evt.state));
@@ -231,6 +252,14 @@ impl ApplicationHandler for App {
     ) {
         match evt {
             DeviceEvent::MouseMotion { delta } => {
+                // block mouse motion if interacting with UI
+                if self.egui_ctx.wants_pointer_input() {
+                    return;
+                }
+                if self.egui_ctx.is_pointer_over_area() {
+                    return;
+                }
+
                 let (dx, dy) = delta;
                 self.game.tx.send(GameMsg::MouseMotion(dx as f32, dy as f32));
             }
@@ -241,5 +270,36 @@ impl ApplicationHandler for App {
     fn exiting(&mut self, _evt_loop: &ActiveEventLoop) {
         self.game.exit();
         self.renderer.exit();
+    }
+}
+
+impl MessageHandler<AppMsg> for AppState {
+    fn handle(&mut self, msg: AppMsg) {
+        match msg {
+            AppMsg::SetCursorCapture(captured) => {
+                if captured {
+                    self.win.set_cursor_visible(false);
+                    // try strict lock with fallback
+                    if self.win.set_cursor_grab(CursorGrabMode::Locked).is_err() {
+                        let _ = self.win.set_cursor_grab(CursorGrabMode::Confined);
+                    }
+                } else {
+                    self.win.set_cursor_visible(true);
+                    let _ = self.win.set_cursor_grab(CursorGrabMode::None);
+                }
+            },
+        }
+    }
+}
+
+impl MessageHandler<GameTelemetry> for AppState {
+    fn handle(&mut self, msg: GameTelemetry) {
+        self.ui.handle(msg);
+    }
+}
+
+impl MessageHandler<RendererTelemetry> for AppState {
+    fn handle(&mut self, msg: RendererTelemetry) {
+        self.ui.handle(msg);
     }
 }

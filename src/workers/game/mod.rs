@@ -3,12 +3,15 @@ pub mod input;
 
 use std::{sync::Arc, time::Duration};
 
-use crate::sync::{
+use triple_buffer::Input;
+use winit::dpi::PhysicalSize;
+
+use crate::{sync::{
     chan::SafeSend,
     worker::{MessageHandler, Worker, WorkerControl, WorkerExt},
-};
-use super::msgs::{GameInit, GameMsg, GameRxBundle, GameTelemetry, GameToApp};
-use camera::Camera;
+}, workers::msgs::AppMsg};
+use super::msgs::{GameMsg, GameRxBundle, GameTelemetry, GameToApp};
+use camera::{Camera, ThinCamera};
 use input::InputState;
 
 pub trait Polled {
@@ -16,10 +19,17 @@ pub trait Polled {
     fn poll_post(&mut self) {}
 }
 
+pub struct GameInit {
+    pub sz: PhysicalSize<u32>,
+    pub app_tx: GameToApp,
+    pub camera_tx: Input<ThinCamera>,
+}
+
 pub struct GameState {
     input: InputState,
     camera: Camera,
     app_tx: GameToApp,
+    camera_tx: Input<ThinCamera>
 }
 
 #[derive(Default)]
@@ -35,6 +45,7 @@ impl Worker for Game {
             input: InputState::new(),
             camera: Camera::new(init.sz),
             app_tx: init.app_tx,
+            camera_tx: init.camera_tx,
         })
     }
 
@@ -47,9 +58,14 @@ impl Worker for Game {
         let dt = since_tick.as_secs_f32();
 
         this.app_tx.telemetry.send(GameTelemetry { tick_time: dt });
+        if let Some(captured) = this.input.take_cursor_capture() {
+            this.app_tx.msgs.send(AppMsg::SetCursorCapture(captured));
+        }
 
         this.camera.poll(&mut this.input, dt);
         this.input.reset_keys();
+
+        this.camera_tx.write(this.camera.thin());
 
         Ok(())
     }
@@ -62,6 +78,7 @@ impl Worker for Game {
 impl MessageHandler<GameMsg> for GameState {
     fn handle(&mut self, msg: GameMsg) {
         match msg {
+            GameMsg::Resized(sz) => self.camera.resize(sz),
             GameMsg::KeyPress(key, state) => self.input.handle_input(key, state),
             GameMsg::MouseClick(btn, state) => self.input.handle_input(btn, state),
             GameMsg::MouseMotion(dx, dy) => {
@@ -69,7 +86,7 @@ impl MessageHandler<GameMsg> for GameState {
                 self.camera.poll(&mut self.input, 0.0);
                 // ^ 0.0 dt to apply mouse movements only
             },
-            GameMsg::Resized(sz) => self.camera.resize(sz),
+            GameMsg::CursorMotion(x, y) => self.input.handle_cursor(x, y),
         }
     }
 }

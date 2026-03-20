@@ -78,6 +78,9 @@ pub struct InputState {
     pub just_pressed: InputSet,
     pub just_released: InputSet,
     pub mouse_delta: (f32, f32),
+    pub cursor_pos: (f32, f32), // absolute position of cursor
+    pub cursor_captured: bool,
+    pub capture_changed: bool,
 }
 
 impl InputState {
@@ -103,18 +106,36 @@ impl InputState {
         delta
     }
 
+    pub fn take_cursor_capture(&mut self) -> Option<bool> {
+        if self.capture_changed {
+            self.capture_changed = false;
+            Some(self.cursor_captured)
+        } else {
+            None
+        }
+    }
+
     pub fn reset_keys(&mut self) {
         self.just_pressed.clear();
         self.just_released.clear();
     }
 
-    pub fn handle_input<T>(&mut self, key: T, state: ElementState) where InputBtn: From<T> {
+    pub fn handle_input<T>(
+        &mut self,
+        key: T,
+        state: ElementState,
+    ) where InputBtn: From<T> {
         let input = InputBtn::from(key);
 
         if state == ElementState::Pressed {
             self.pressed.insert(input);
             self.just_pressed.insert(input);
             self.just_released.remove(input);
+
+            if input == InputBtn::CaptureCursor {
+                self.cursor_captured = !self.cursor_captured;
+                self.capture_changed = true;
+            }
         } else {
             self.pressed.remove(input);
             self.just_pressed.remove(input);
@@ -123,7 +144,15 @@ impl InputState {
     }
 
     pub fn handle_mouse(&mut self, dx: f32, dy: f32) {
-        self.mouse_delta.0 += dx;
-        self.mouse_delta.1 += dy;
+        if self.cursor_captured {
+            self.mouse_delta.0 += dx;
+            self.mouse_delta.1 += dy;
+        }
+    }
+
+    pub fn handle_cursor(&mut self, x: f32, y: f32) {
+        if !self.cursor_captured {
+            self.cursor_pos = (x, y);
+        }
     }
 }

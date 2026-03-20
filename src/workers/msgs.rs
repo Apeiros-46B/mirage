@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-use std::sync::Arc;
-
 use egui::{ClippedPrimitive, TexturesDelta};
 use winit::{
     dpi::PhysicalSize,
@@ -9,7 +7,11 @@ use winit::{
     keyboard::PhysicalKey,
 };
 
-use crate::{gpu::ctx::VulkanCtx, sync::worker::channel_routing_for};
+use crate::sync::worker::channel_routing_for;
+
+pub enum AppMsg {
+    SetCursorCapture(bool),
+}
 
 #[derive(Debug)]
 pub struct GameTelemetry {
@@ -23,6 +25,7 @@ pub struct RendererTelemetry {
 
 channel_routing_for!(App {
     Game => {
+        msgs: [AppMsg; 64],
         telemetry: [GameTelemetry; 64],
     },
     Renderer => {
@@ -30,27 +33,17 @@ channel_routing_for!(App {
     },
 });
 
-pub struct GameInit {
-    pub sz: PhysicalSize<u32>,
-    pub app_tx: GameToApp,
-}
-
 pub enum GameMsg {
     Resized(PhysicalSize<u32>),
     KeyPress(PhysicalKey, ElementState),
     MouseClick(MouseButton, ElementState),
-    MouseMotion(f32, f32),
+    MouseMotion(f32, f32), // raw device motion, dx dy
+    CursorMotion(f32, f32), // cursor position, x y
 }
 
 channel_routing_for!(Game {
     primary: [GameMsg; 8192] blocking,
 });
-
-pub struct RendererInit {
-    pub sz: PhysicalSize<u32>,
-    pub ctx: Arc<VulkanCtx>,
-    pub app_tx: RendererToApp,
-}
 
 pub enum RendererMsg {
     Resized(PhysicalSize<u32>),

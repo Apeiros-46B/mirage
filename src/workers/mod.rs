@@ -1,5 +1,5 @@
 pub mod audio;
 pub mod game;
-pub mod render;
+pub mod renderer;
 pub mod stream;
 pub mod msgs;

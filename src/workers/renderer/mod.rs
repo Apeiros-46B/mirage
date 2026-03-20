@@ -2,26 +2,37 @@ mod frames;
 mod passes;
 
 use ash::vk;
+use triple_buffer::Output;
+use winit::dpi::PhysicalSize;
 use std::{sync::Arc, time::Duration};
 
 use crate::{
     gpu::{ctx::{Destroy, VulkanCtx}, task::Task},
     sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
 };
-use super::msgs::{
-    EguiUpdate,
-    RendererInit,
-    RendererMsg,
-    RendererRxBundle,
-    RendererTelemetry,
-    RendererToApp,
+use super::{
+    game::camera::ThinCamera,
+    msgs::{
+        EguiUpdate,
+        RendererMsg,
+        RendererRxBundle,
+        RendererTelemetry,
+        RendererToApp,
+    },
 };
 use passes::{
     depth::DepthPrepass,
     egui::EguiPass,
-    frame::{ClearPass, FrameCtx, PresentPass},
+    frame::{ClearPass, PresentPass},
 };
-use frames::FrameManager;
+use frames::{FrameManager, RenderTarget};
+
+pub struct RendererInit {
+    pub sz: PhysicalSize<u32>,
+    pub ctx: Arc<VulkanCtx>,
+    pub app_tx: RendererToApp,
+    pub camera_rx: Output<ThinCamera>,
+}
 
 pub struct RendererState {
     manager: FrameManager,
@@ -32,6 +43,7 @@ pub struct RendererState {
     egui_pass: EguiPass,
 
     app_tx: RendererToApp,
+    camera_rx: Output<ThinCamera>,
     ctx: Arc<VulkanCtx>,
 }
 
@@ -50,6 +62,14 @@ impl Drop for RendererState {
 #[derive(Default)]
 pub struct Renderer;
 
+pub struct FrameCtx<'a> {
+    pub in_flight: RenderTarget<'a>,
+    pub frame_idx: usize,
+    pub time: f64, // time since engine start
+    pub dt: f32, // time since last frame
+    pub camera: ThinCamera,
+}
+
 impl Worker for Renderer {
     type Init = RendererInit;
     type State = RendererState;
@@ -57,7 +77,6 @@ impl Worker for Renderer {
 
     fn on_resume(&self, init: Self::Init) -> anyhow::Result<Self::State> {
         let ctx = init.ctx;
-        let app_tx = init.app_tx;
         let extent = vk::Extent2D { width: init.sz.width, height: init.sz.height };
         let manager = FrameManager::new(ctx.clone(), init.sz)?;
 
@@ -72,7 +91,8 @@ impl Worker for Renderer {
             depth_prepass,
             present_pass,
             egui_pass,
-            app_tx,
+            app_tx: init.app_tx,
+            camera_rx: init.camera_rx,
             ctx,
         })
     }
@@ -107,6 +127,7 @@ impl Worker for Renderer {
             frame_idx: tick,
             time: since_wake.as_secs_f64(),
             dt,
+            camera: *this.camera_rx.read(),
         };
 
         unsafe {

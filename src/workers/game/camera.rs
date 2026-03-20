@@ -1,3 +1,4 @@
+use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec2, Vec3};
 use winit::dpi::PhysicalSize;
 
@@ -21,6 +22,17 @@ pub struct Camera {
     pub view: Mat4,
 
     scr_sz: Vec2,
+}
+
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+#[repr(C)]
+pub struct ThinCamera {
+    pub pos: Vec3,
+    _pad: f32,
+    pub inv_proj: Mat4,
+    pub inv_view: Mat4,
+    pub proj: Mat4,
+    pub view: Mat4,
 }
 
 const UP_DIR: Vec3 = Vec3::new(0.0, 1.0, 0.0);
@@ -65,6 +77,17 @@ impl Camera {
         this.recalc_view();
 
         this
+    }
+
+    pub fn thin(&self) -> ThinCamera {
+        ThinCamera {
+            pos: self.pos,
+            _pad: 0.0,
+            inv_proj: self.inv_proj,
+            inv_view: self.inv_view,
+            proj: self.proj,
+            view: self.view,
+        }
     }
 
     pub fn set_fov(&mut self, new_fov: f32) {

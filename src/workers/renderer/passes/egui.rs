@@ -11,9 +11,8 @@ use crate::{
         sync::ImageBarrierExt,
         task::Task,
     },
-    workers::{msgs::EguiUpdate, render::frames::PerFrame},
+    workers::{msgs::EguiUpdate, renderer::{FrameCtx, frames::PerFrame}},
 };
-use super::frame::FrameCtx;
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/egui-pass.spv"));
 
