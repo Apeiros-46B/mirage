@@ -4,7 +4,7 @@ use ash::{khr, vk};
 use winit::dpi::PhysicalSize;
 
 use crate::{
-    gpu::{arena::GPUArena, ctx::{Destroy, VulkanCtx}},
+    gpu::{arena::GPUArena, ctx::{Destroy, Recreate, VulkanCtx}},
     util::array_try_from_fn,
 };
 
@@ -507,22 +507,16 @@ impl<T> PerFrame<T> {
         Self { items }
     }
 
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
     pub fn iter(&self) -> Iter<'_, T> {
         self.items.iter()
     }
 
     pub fn iter_mut(&mut self) -> IterMut<'_, T> {
         self.items.iter_mut()
-    }
-}
-
-impl<T: Destroy> Destroy for PerFrame<T> {
-    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
-        for item in self.iter_mut() {
-            unsafe {
-                item.destroy(ctx);
-            }
-        }
     }
 }
 
@@ -537,6 +531,50 @@ impl<T> Index<usize> for PerFrame<T> {
 impl<T> IndexMut<usize> for PerFrame<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.items[index]
+    }
+}
+
+impl<T: Destroy> Destroy for PerFrame<T> {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        for item in self.iter_mut() {
+            unsafe {
+                item.destroy(ctx);
+            }
+        }
+    }
+}
+
+// TODO: make this more resilient against errors
+impl<T: Destroy> Recreate for PerFrame<T> {
+    type Item = T;
+
+    unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, mut f: F) -> anyhow::Result<()>
+    where
+        F: FnMut() -> anyhow::Result<Self::Item>,
+    {
+        for item in self.iter_mut() {
+            unsafe { item.destroy(ctx); }
+        }
+
+        let mut new_items = Vec::with_capacity(self.len());
+
+        for _ in 0..self.len() {
+            match f() {
+                Ok(new_item) => new_items.push(new_item),
+                Err(e) => {
+                    for mut discarded in new_items {
+                        unsafe { discarded.destroy(ctx); }
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        for (item, new_item) in self.iter_mut().zip(new_items.into_iter()) {
+            *item = new_item;
+        }
+
+        Ok(())
     }
 }
 // }}}

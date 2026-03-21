@@ -23,7 +23,6 @@ const DEPTH_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange 
 pub struct DepthPrepass {
     pipeline: vk::Pipeline,
     layout: vk::PipelineLayout,
-    depth_targets: PerFrame<AllocatedImage>,
     world_bda: u64,
 }
 
@@ -32,14 +31,13 @@ impl Destroy for DepthPrepass {
         unsafe {
             ctx.dev.destroy_pipeline_layout(self.layout, None);
             ctx.dev.destroy_pipeline(self.pipeline, None);
-            self.depth_targets.destroy(ctx);
         }
     }
 }
 
 impl DepthPrepass {
     // TODO: review
-    pub fn new(ctx: &VulkanCtx, extent: vk::Extent2D) -> anyhow::Result<Self> {
+    pub fn new(ctx: &VulkanCtx) -> anyhow::Result<Self> {
         let code = ash::util::read_spv(&mut std::io::Cursor::new(SPV))?;
         let shader_info = vk::ShaderModuleCreateInfo::default().code(&code);
         let module = unsafe { ctx.dev.create_shader_module(&shader_info, None)? };
@@ -124,38 +122,24 @@ impl DepthPrepass {
         // don't need it anymore
         unsafe { ctx.dev.destroy_shader_module(module, None); }
 
-        let depth_targets = PerFrame::try_init(|_| make_depth_target(ctx, extent))?;
-
         Ok(Self {
             pipeline,
             layout,
-            depth_targets,
             world_bda: 0,
         })
     }
 }
 
 impl Task<FrameCtx<'_>> for DepthPrepass {
-    fn resize(&mut self, ctx: &VulkanCtx, extent: vk::Extent2D) -> anyhow::Result<()> {
-        for target in self.depth_targets.iter_mut() {
-            unsafe {
-                target.destroy(ctx);
-            }
-            *target = make_depth_target(ctx, extent)?;
-        }
-        Ok(())
-    }
-
     unsafe fn execute(
         &mut self,
         ctx: &VulkanCtx,
         frame: &mut FrameCtx,
     ) -> anyhow::Result<()> {
         let cmd = frame.in_flight.cmd;
-        let fif = frame.in_flight.idx;
 
         let mut barrier = vk::ImageMemoryBarrier2::default()
-            .image(self.depth_targets[fif].img)
+            .image(frame.depth_img)
             .subresource_range(DEPTH_SUBRES_RANGE)
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
@@ -168,7 +152,7 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
 
         // render depth only, cleared to 1.0
         let depth_atmt = vk::RenderingAttachmentInfo::default()
-            .image_view(self.depth_targets[fif].view)
+            .image_view(frame.depth_view)
             .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)
@@ -219,13 +203,18 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
     }
 }
 
-fn make_depth_target(ctx: &VulkanCtx, extent: vk::Extent2D) -> anyhow::Result<AllocatedImage> {
-    AllocatedImage::new(
-        ctx,
-        extent.into(),
-        vk::Format::D32_SFLOAT,
-        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        DEPTH_SUBRES_RANGE,
-        "depth_prepass_out",
-    )
+pub fn make_depth_targets(
+    ctx: &VulkanCtx,
+    extent: vk::Extent2D,
+) -> anyhow::Result<PerFrame<AllocatedImage>> {
+    PerFrame::try_init(|_| {
+        AllocatedImage::new(
+            ctx,
+            extent.into(),
+            vk::Format::D32_SFLOAT,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            DEPTH_SUBRES_RANGE,
+            "depth_prepass_out",
+        )
+    })
 }

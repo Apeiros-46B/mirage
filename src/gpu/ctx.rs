@@ -9,6 +9,7 @@ use crate::gpu::{GPU, surf::Surface};
 
 const DEV_EXTS: [*const c_char; 1] = [ash::khr::swapchain::NAME.as_ptr()];
 
+// TODO: make Destroy implementations idempotent
 pub trait Destroy {
     /// destroys the Vulkan resource and frees its associated memory
     /// - must be called only when the GPU is no longer using this resource
@@ -46,6 +47,19 @@ impl<T: Destroy> Destroy for Option<T> {
         }
     }
 }
+
+
+pub trait Recreate: Destroy {
+    type Item;
+
+    /// recreates the Vulkan resource
+    unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, f: F) -> anyhow::Result<()>
+    where
+        F: FnMut() -> anyhow::Result<Self::Item>;
+}
+
+// TODO: impl Recreate for Vec<T: Recreate>
+
 
 fn create_dev(
     inst: &ash::Instance,

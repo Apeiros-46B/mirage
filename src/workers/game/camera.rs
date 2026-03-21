@@ -28,7 +28,7 @@ const UP_DIR: Vec3 = Vec3::new(0.0, 1.0, 0.0);
 const BASE_SPEED: f32 = 5.0;
 const BASE_ROT_SPEED: f32 = 0.005;
 
-const DEFAULT_POS: Vec3 = Vec3::new(0.0, 0.0, 3.0);
+const DEFAULT_POS: Vec3 = Vec3::new(128.0, 128.0, 500.0);
 const DEFAULT_YAW: f32 = -std::f32::consts::FRAC_PI_2; // facing -Z
 const DEFAULT_PITCH: f32 = 0.0;
 

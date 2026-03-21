@@ -7,8 +7,9 @@ use winit::dpi::PhysicalSize;
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    gpu::{ctx::{Destroy, VulkanCtx}, task::Task},
+    gpu::{ctx::{Destroy, VulkanCtx}, img::AllocatedImage, task::Task},
     sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
+    workers::renderer::{frames::PerFrame, passes::depth::make_depth_targets},
 };
 use super::msgs::{
     CameraState,
@@ -35,6 +36,9 @@ pub struct RendererInit {
 pub struct RendererState {
     manager: FrameManager,
 
+    depth_targets: PerFrame<AllocatedImage>,
+    color_targets: PerFrame<AllocatedImage>,
+
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
     present_pass: PresentPass,
@@ -50,8 +54,13 @@ impl Drop for RendererState {
         // ctx is dropped by the compiler after this is done
         unsafe {
             let _ = self.ctx.dev.device_wait_idle();
+
             self.depth_prepass.destroy(&self.ctx);
             self.egui_pass.destroy(&self.ctx);
+
+            self.depth_targets.destroy(&self.ctx);
+            self.color_targets.destroy(&self.ctx);
+
             self.manager.destroy(&self.ctx);
         }
     }
@@ -67,6 +76,11 @@ pub struct FrameCtx<'a> {
     pub dt: f32, // time since last frame
 
     pub camera_bda: u64, // pointer to CameraState
+
+    pub depth_img: vk::Image,
+    pub depth_view: vk::ImageView,
+    pub color_img: vk::Image,
+    pub color_view: vk::ImageView,
 }
 
 impl Worker for Renderer {
@@ -79,17 +93,25 @@ impl Worker for Renderer {
         let extent = vk::Extent2D { width: init.sz.width, height: init.sz.height };
         let manager = FrameManager::new(ctx.clone(), init.sz)?;
 
+        let depth_targets = make_depth_targets(&ctx, extent)?;
+        let color_targets = make_depth_targets(&ctx, extent)?;
+
         let clear_pass = ClearPass;
-        let depth_prepass = DepthPrepass::new(&ctx, extent)?;
+        let depth_prepass = DepthPrepass::new(&ctx)?;
         let present_pass = PresentPass;
         let egui_pass = EguiPass::new(&ctx, manager.swapchain.fmt)?;
 
         Ok(RendererState {
             manager,
+
+            depth_targets,
+            color_targets,
+
             clear_pass,
             depth_prepass,
             present_pass,
             egui_pass,
+
             app_tx: init.app_tx,
             camera_rx: init.camera_rx,
             ctx,
@@ -115,28 +137,39 @@ impl Worker for Renderer {
         };
 
         if target.did_resize {
-            this.clear_pass.resize(&this.ctx, target.img.extent)?;
-            this.present_pass.resize(&this.ctx, target.img.extent)?;
-            this.depth_prepass.resize(&this.ctx, target.img.extent)?;
-            this.egui_pass.resize(&this.ctx, target.img.extent)?;
+            unsafe {
+                this.depth_targets.destroy(&this.ctx);
+                this.depth_targets = make_depth_targets(&this.ctx, target.img.extent)?;
+
+                this.color_targets.destroy(&this.ctx);
+                this.color_targets = make_depth_targets(&this.ctx, target.img.extent)?;
+            }
         }
 
         let mut camera = target.arena.alloc_of::<CameraState>();
         unsafe { camera.write(this.camera_rx.read()); }
 
+        let fif = target.idx;
         let mut frame = FrameCtx {
             in_flight: target,
             frame_idx: tick,
             time: since_wake.as_secs_f64(),
             dt,
+
             camera_bda: camera.bda,
+
+            depth_img: this.depth_targets[fif].img,
+            depth_view: this.depth_targets[fif].view,
+            color_img: this.color_targets[fif].img,
+            color_view: this.color_targets[fif].view,
         };
 
         unsafe {
             this.clear_pass.execute(&this.ctx, &mut frame)?;
             this.depth_prepass.execute(&this.ctx, &mut frame)?;
-            this.present_pass.execute(&this.ctx, &mut frame)?;
+            // TODO
             this.egui_pass.execute(&this.ctx, &mut frame)?;
+            this.present_pass.execute(&this.ctx, &mut frame)?;
         }
 
         this.manager.submit_frame(&this.ctx)
