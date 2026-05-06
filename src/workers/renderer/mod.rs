@@ -9,7 +9,7 @@ use std::{sync::Arc, time::Duration};
 use crate::{
     gpu::{ctx::{Destroy, VulkanCtx}, img::AllocatedImage, task::Task},
     sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
-    workers::renderer::{frames::PerFrame, passes::depth::make_depth_targets},
+    workers::renderer::frames::PerFrame,
 };
 use super::msgs::{
     CameraState,
@@ -20,9 +20,10 @@ use super::msgs::{
     RendererToApp,
 };
 use passes::{
-    depth::DepthPrepass,
+    depth::{DepthPrepass, make_depth_targets},
     egui::EguiPass,
     frame::{ClearPass, PresentPass},
+    primary::{PrimaryPass, make_color_targets},
 };
 use frames::{FrameManager, RenderTarget};
 
@@ -41,8 +42,9 @@ pub struct RendererState {
 
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
-    present_pass: PresentPass,
+    primary_pass: PrimaryPass,
     egui_pass: EguiPass,
+    present_pass: PresentPass,
 
     app_tx: RendererToApp,
     camera_rx: Output<CameraState>,
@@ -55,8 +57,9 @@ impl Drop for RendererState {
         unsafe {
             let _ = self.ctx.dev.device_wait_idle();
 
-            self.depth_prepass.destroy(&self.ctx);
             self.egui_pass.destroy(&self.ctx);
+            self.primary_pass.destroy(&self.ctx);
+            self.depth_prepass.destroy(&self.ctx);
 
             self.depth_targets.destroy(&self.ctx);
             self.color_targets.destroy(&self.ctx);
@@ -98,8 +101,9 @@ impl Worker for Renderer {
 
         let clear_pass = ClearPass;
         let depth_prepass = DepthPrepass::new(&ctx)?;
-        let present_pass = PresentPass;
+        let primary_pass = PrimaryPass::new(&ctx)?;
         let egui_pass = EguiPass::new(&ctx, manager.swapchain.fmt)?;
+        let present_pass = PresentPass;
 
         Ok(RendererState {
             manager,
@@ -109,8 +113,9 @@ impl Worker for Renderer {
 
             clear_pass,
             depth_prepass,
-            present_pass,
+            primary_pass,
             egui_pass,
+            present_pass,
 
             app_tx: init.app_tx,
             camera_rx: init.camera_rx,
@@ -142,7 +147,7 @@ impl Worker for Renderer {
                 this.depth_targets = make_depth_targets(&this.ctx, target.img.extent)?;
 
                 this.color_targets.destroy(&this.ctx);
-                this.color_targets = make_depth_targets(&this.ctx, target.img.extent)?;
+                this.color_targets = make_color_targets(&this.ctx, target.img.extent)?;
             }
         }
 
@@ -158,6 +163,7 @@ impl Worker for Renderer {
 
             camera_bda: camera.bda,
 
+            // TODO maybe just pass depth: AllocatedImage etc. need to doublecheck borrowing but it should be fine
             depth_img: this.depth_targets[fif].img,
             depth_view: this.depth_targets[fif].view,
             color_img: this.color_targets[fif].img,
@@ -167,7 +173,8 @@ impl Worker for Renderer {
         unsafe {
             this.clear_pass.execute(&this.ctx, &mut frame)?;
             this.depth_prepass.execute(&this.ctx, &mut frame)?;
-            // TODO
+            this.primary_pass.execute(&this.ctx, &mut frame)?;
+
             this.egui_pass.execute(&this.ctx, &mut frame)?;
             this.present_pass.execute(&this.ctx, &mut frame)?;
         }
