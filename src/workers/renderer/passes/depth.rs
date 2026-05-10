@@ -139,7 +139,7 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
         let cmd = frame.in_flight.cmd;
 
         let mut barrier = vk::ImageMemoryBarrier2::default()
-            .image(frame.depth_img)
+            .image(frame.depth.img)
             .subresource_range(DEPTH_SUBRES_RANGE)
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
@@ -152,7 +152,7 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
 
         // render depth only, cleared to 1.0
         let depth_atmt = vk::RenderingAttachmentInfo::default()
-            .image_view(frame.depth_view)
+            .image_view(frame.depth.view)
             .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)

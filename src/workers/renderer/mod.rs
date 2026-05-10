@@ -80,10 +80,8 @@ pub struct FrameCtx<'a> {
 
     pub camera_bda: u64, // pointer to CameraState
 
-    pub depth_img: vk::Image,
-    pub depth_view: vk::ImageView,
-    pub color_img: vk::Image,
-    pub color_view: vk::ImageView,
+    pub depth: &'a AllocatedImage,
+    pub color: &'a AllocatedImage,
 }
 
 impl Worker for Renderer {
@@ -163,11 +161,8 @@ impl Worker for Renderer {
 
             camera_bda: camera.bda,
 
-            // TODO maybe just pass depth: AllocatedImage etc. need to doublecheck borrowing but it should be fine
-            depth_img: this.depth_targets[fif].img,
-            depth_view: this.depth_targets[fif].view,
-            color_img: this.color_targets[fif].img,
-            color_view: this.color_targets[fif].view,
+            depth: &this.depth_targets[fif],
+            color: &this.color_targets[fif],
         };
 
         unsafe {
