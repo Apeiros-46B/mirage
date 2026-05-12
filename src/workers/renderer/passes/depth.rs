@@ -72,8 +72,9 @@ impl DepthPrepass {
 
         // dynamic viewport/scissor to avoid resizing
         let viewport_state_ci = vk::PipelineViewportStateCreateInfo::default()
-            .viewport_count(1)
-            .scissor_count(1);
+            // .viewport_count(1)
+            // .scissor_count(1)
+        ;
 
         let rast_ci = vk::PipelineRasterizationStateCreateInfo::default()
             .cull_mode(vk::CullModeFlags::BACK)
@@ -91,9 +92,10 @@ impl DepthPrepass {
 
         let col_blend_ci = vk::PipelineColorBlendStateCreateInfo::default();
 
-        let dyn_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        // let dyn_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dyn_state_ci = vk::PipelineDynamicStateCreateInfo::default()
-            .dynamic_states(&dyn_states);
+            // .dynamic_states(&dyn_states)
+        ;
 
         let mut rendering_ci = vk::PipelineRenderingCreateInfo::default()
             .depth_attachment_format(vk::Format::D32_SFLOAT);

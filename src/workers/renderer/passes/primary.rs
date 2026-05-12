@@ -1,3 +1,4 @@
+use anyhow::bail;
 use ash::vk;
 
 use crate::{
@@ -51,13 +52,32 @@ impl PrimaryPass {
 
         let layout = unsafe { ctx.dev.create_pipeline_layout(&layout_info, None)? };
 
-        let compute_stage_ci = vk::PipelineShaderStageCreateInfo::default()
+        let compute_stage_info = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(module)
-            .name(c"csh");
-        let stages = [compute_stage_ci];
+            .name(c"main");
 
-        todo!()
+        let pipeline_info = vk::ComputePipelineCreateInfo::default()
+            .layout(layout)
+            .stage(compute_stage_info);
+
+        let pipeline = unsafe {
+            let res = ctx.dev.create_compute_pipelines(
+                vk::PipelineCache::null(),
+                &[pipeline_info],
+                None,
+            );
+            match res {
+                Ok(pipelines) => pipelines[0],
+                Err(_) => bail!("couldn't create pipelines")
+            }
+        };
+
+        Ok(Self {
+            layout,
+            pipeline,
+            world_bda: 0,
+        })
     }
 }
 
@@ -67,7 +87,8 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
         ctx: &VulkanCtx,
         frame: &mut FrameCtx,
     ) -> anyhow::Result<()> {
-        todo!()
+        // TODO
+        Ok(())
     }
 }
 
