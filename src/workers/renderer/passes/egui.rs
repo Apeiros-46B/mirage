@@ -399,7 +399,9 @@ impl Task<FrameCtx<'_>> for EguiPass {
                     .sampler(self.sampler);
 
                 let write = vk::WriteDescriptorSet::default()
-                    .dst_set(set).dst_binding(0).descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .dst_set(set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&img_info));
 
                 unsafe { ctx.dev.update_descriptor_sets(std::slice::from_ref(&write), &[]); }

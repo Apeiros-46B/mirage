@@ -46,6 +46,9 @@ pub struct RendererState {
     egui_pass: EguiPass,
     present_pass: PresentPass,
 
+    desc_pool: vk::DescriptorPool,
+    desc_set_layout: vk::DescriptorSetLayout,
+
     app_tx: RendererToApp,
     camera_rx: Output<CameraState>,
     ctx: Arc<VulkanCtx>,
@@ -95,7 +98,7 @@ impl Worker for Renderer {
         let manager = FrameManager::new(ctx.clone(), init.sz)?;
 
         let depth_targets = make_depth_targets(&ctx, extent)?;
-        let color_targets = make_depth_targets(&ctx, extent)?;
+        let color_targets = make_color_targets(&ctx, extent)?;
 
         let clear_pass = ClearPass;
         let depth_prepass = DepthPrepass::new(&ctx)?;
