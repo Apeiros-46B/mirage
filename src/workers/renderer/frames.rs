@@ -1,4 +1,4 @@
-use std::{ops::{Index, IndexMut}, slice::{Iter, IterMut}, sync::Arc};
+use std::{ops::{Deref, Index, IndexMut}, slice::{Iter, IterMut}, sync::Arc};
 
 use ash::{khr, vk};
 use winit::dpi::PhysicalSize;
@@ -517,6 +517,20 @@ impl<T> PerFrame<T> {
 
     pub fn iter_mut(&mut self) -> IterMut<'_, T> {
         self.items.iter_mut()
+    }
+}
+
+impl<T> From<[T; FRAMES_IN_FLIGHT]> for PerFrame<T> {
+    fn from(items: [T; FRAMES_IN_FLIGHT]) -> Self {
+        Self { items }
+    }
+}
+
+impl<T> Deref for PerFrame<T> {
+    type Target = [T; FRAMES_IN_FLIGHT];
+
+    fn deref(&self) -> &Self::Target {
+        &self.items
     }
 }
 

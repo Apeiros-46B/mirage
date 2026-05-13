@@ -26,15 +26,11 @@ pub struct PrimaryPass {
 
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
-    desc_set_layout: vk::DescriptorSetLayout,
-    desc_pool: vk::DescriptorPool,
 }
 
 impl Destroy for PrimaryPass {
     unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
         unsafe {
-            ctx.dev.destroy_descriptor_set_layout(self.desc_set_layout, None);
-            ctx.dev.destroy_descriptor_pool(self.desc_pool, None);
             ctx.dev.destroy_pipeline_layout(self.pipeline_layout, None);
             ctx.dev.destroy_pipeline(self.pipeline, None);
             ctx.dev.destroy_sampler(self.depth_sampler, None);
@@ -56,7 +52,6 @@ impl PrimaryPass {
             .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
         let sampler = unsafe { ctx.dev.create_sampler(&sampler_info, None)? };
 
-        // {{{ binding stuff
         let push_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .offset(0)
@@ -66,7 +61,6 @@ impl PrimaryPass {
             .push_constant_ranges(std::slice::from_ref(&push_range));
 
         let layout = unsafe { ctx.dev.create_pipeline_layout(&layout_info, None)? };
-        // }}}
 
         let compute_stage_info = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
@@ -90,8 +84,9 @@ impl PrimaryPass {
         };
 
         Ok(Self {
-            pipeline_layout: layout,
+            depth_sampler: sampler,
             pipeline,
+            pipeline_layout: layout,
         })
     }
 }

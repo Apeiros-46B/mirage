@@ -75,6 +75,14 @@ fn create_dev(
     }
 
     let mut vk12 = vk::PhysicalDeviceVulkan12Features::default()
+        // bindless
+        .descriptor_binding_partially_bound(true)
+        .runtime_descriptor_array(true)
+        .shader_sampled_image_array_non_uniform_indexing(true)
+        .descriptor_binding_sampled_image_update_after_bind(true)
+        .descriptor_binding_storage_image_update_after_bind(true)
+
+        // bda
         .buffer_device_address(true)
         .vulkan_memory_model(true);
 

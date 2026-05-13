@@ -46,9 +46,6 @@ pub struct RendererState {
     egui_pass: EguiPass,
     present_pass: PresentPass,
 
-    desc_pool: vk::DescriptorPool,
-    desc_set_layout: vk::DescriptorSetLayout,
-
     app_tx: RendererToApp,
     camera_rx: Output<CameraState>,
     ctx: Arc<VulkanCtx>,

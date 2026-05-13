@@ -1,5 +1,6 @@
 pub mod arena;
 pub mod ctx;
+pub mod desc;
 pub mod img;
 pub mod surf;
 pub mod sync;
