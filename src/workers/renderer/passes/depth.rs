@@ -70,11 +70,17 @@ impl DepthPrepass {
         let input_asm_ci = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
 
-        // dynamic viewport/scissor to avoid resizing
-        let viewport_state_ci = vk::PipelineViewportStateCreateInfo::default()
-            // .viewport_count(1)
-            // .scissor_count(1)
-        ;
+        // TODO: there is something slightly wrong with viewport/scissor
+        /*
+Validation Error: [ VUID-VkPipelineViewportStateCreateInfo-viewportCount-04135 ] | MessageID = 0x405fe816
+vkCreateGraphicsPipelines(): pCreateInfos[0].pViewportState->viewportCount can't be 0 unless VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT is used.
+The Vulkan spec states: If the graphics pipeline is being created with VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT set then viewportCount must be 0, otherwise viewportCount must be greater than 0 (https://vulkan.lunarg.com/doc/view/1.4.313.0/linux/antora/spec/latest/chapters/vertexpostproc.html#VUID-VkPipelineViewportStateCreateInfo-viewportCount-04135)
+
+Validation Error: [ VUID-VkPipelineViewportStateCreateInfo-scissorCount-04136 ] | MessageID = 0x6a5d7d30
+vkCreateGraphicsPipelines(): pCreateInfos[0].pViewportState->scissorCount can't be 0 unless VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT is used.
+The Vulkan spec states: If the graphics pipeline is being created with VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT set then scissorCount must be 0, otherwise scissorCount must be greater than 0 (https://vulkan.lunarg.com/doc/view/1.4.313.0/linux/antora/spec/latest/chapters/vertexpostproc.html#VUID-VkPipelineViewportStateCreateInfo-scissorCount-04136)
+        */
+        let viewport_state_ci = vk::PipelineViewportStateCreateInfo::default();
 
         let rast_ci = vk::PipelineRasterizationStateCreateInfo::default()
             .cull_mode(vk::CullModeFlags::BACK)
@@ -92,11 +98,6 @@ impl DepthPrepass {
 
         let col_blend_ci = vk::PipelineColorBlendStateCreateInfo::default();
 
-        // let dyn_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dyn_state_ci = vk::PipelineDynamicStateCreateInfo::default()
-            // .dynamic_states(&dyn_states)
-        ;
-
         let mut rendering_ci = vk::PipelineRenderingCreateInfo::default()
             .depth_attachment_format(vk::Format::D32_SFLOAT);
 
@@ -109,7 +110,6 @@ impl DepthPrepass {
             .multisample_state(&multismp_ci)
             .depth_stencil_state(&depth_sten_ci)
             .color_blend_state(&col_blend_ci)
-            .dynamic_state(&dyn_state_ci)
             .layout(layout)
             .push_next(&mut rendering_ci);
 

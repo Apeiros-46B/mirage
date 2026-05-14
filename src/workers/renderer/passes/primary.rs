@@ -181,14 +181,7 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
             vk::AccessFlags2::TRANSFER_READ,
         );
 
-        // TODO: this barrier is wrong and causes validation errors.
-        // we need a better barrier tracking system. perhaps move barriers out into the
-        // renderer main so sync is centralized, and ensure that each pass only does
-        // one barrier? might be painful with egui pass, have to split that. splitting
-        // this pass into dispatch and blit is ez tho
-        let swap_barrier = vk::ImageMemoryBarrier2::default()
-            .image(frame.in_flight.img.img)
-            .subresource_range(COLOR_SUBRES_RANGE)
+        let mut swap_barrier = frame.in_flight.base_barrier
             .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
             .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
@@ -197,13 +190,11 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
             .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
 
         unsafe {
-            ctx.debug.begin_label(cmd, c"swap barrier");
             ctx.dev.cmd_pipeline_barrier2(
                 cmd,
                 &vk::DependencyInfo::default()
                     .image_memory_barriers(&[swap_barrier, color_barrier]),
             );
-            ctx.debug.end_label(cmd);
 
             let blit_ofs = [
                 vk::Offset3D::default()
@@ -236,6 +227,14 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
                 vk::Filter::NEAREST,
             );
         }
+
+        swap_barrier = swap_barrier.next_phase(
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+            vk::AccessFlags2::COLOR_ATTACHMENT_READ
+            | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+        );
+        unsafe { ctx.dev.cmd_pipeline_barrier2(cmd, &swap_barrier.dep_info()) };
 
         Ok(())
     }
