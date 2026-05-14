@@ -26,15 +26,7 @@ void main(uint3 threadId : SV_DispatchThreadID) {
 		return;
 	}
 
-	// float value = depth.Load(threadId);
-	// color.Store(threadId.xy, float4(value, value, value, 1.0));
-	color.Store(
-		threadId.xy,
-		float4(
-			float(threadId.x) / float(width),
-			float(threadId.y) / float(height),
-			1.0,
-			1.0,
-		)
-	);
+	// ts is ridiculous
+	float value = pow(depth.Load(threadId), 1000);
+	color.Store(threadId.xy, float4(value, value, value, 1.0));
 }
