@@ -237,10 +237,6 @@ impl Swapchain {
         self.imgs[idx as usize].render_sem
     }
 
-    pub fn image_count(&self) -> usize {
-        self.imgs.len()
-    }
-
     fn choose_fmt(&self, ctx: &VulkanCtx) -> anyhow::Result<vk::SurfaceFormatKHR> {
         let fmts = ctx.surf.get_fmts(&ctx.gpu)?;
         Ok(fmts.iter()
@@ -285,7 +281,7 @@ impl Swapchain {
         // try block would be nice here
         let result = (|| -> anyhow::Result<()> {
             for img in raw {
-                ctx.debug.set_name(img, c"swap img");
+                ctx.debug.set_name(img, c"swap img")?;
 
                 let view = unsafe {
                     ctx.dev.create_image_view(

@@ -15,7 +15,6 @@ use crate::{
         frames::PerFrame,
     },
 };
-use super::depth::DEPTH_SUBRES_RANGE;
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/primary-pass.spv"));
 
@@ -146,67 +145,6 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
                 1,
             );
         }
-
-        color_barrier = color_barrier.next_phase(
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            vk::PipelineStageFlags2::BLIT,
-            vk::AccessFlags2::TRANSFER_READ,
-        );
-
-        let mut swap_barrier = frame.in_flight.base_barrier
-            .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-            .dst_stage_mask(vk::PipelineStageFlags2::BLIT)
-            .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-            .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
-
-        unsafe {
-            ctx.dev.cmd_pipeline_barrier2(
-                cmd,
-                &vk::DependencyInfo::default()
-                    .image_memory_barriers(&[swap_barrier, color_barrier]),
-            );
-
-            let blit_ofs = [
-                vk::Offset3D::default()
-                    .x(0)
-                    .y(0)
-                    .z(0),
-                vk::Offset3D::default()
-                    .x(frame.color.extent.width as i32)
-                    .y(frame.color.extent.height as i32)
-                    .z(1),
-            ];
-            let blit_subres = vk::ImageSubresourceLayers::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .mip_level(0)
-                .base_array_layer(0)
-                .layer_count(1);
-            ctx.dev.cmd_blit_image(
-                cmd,
-                frame.color.img,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                frame.in_flight.img.img,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[
-                    vk::ImageBlit::default()
-                        .src_offsets(blit_ofs)
-                        .dst_offsets(blit_ofs)
-                        .src_subresource(blit_subres)
-                        .dst_subresource(blit_subres)
-                ],
-                vk::Filter::NEAREST,
-            );
-        }
-
-        swap_barrier = swap_barrier.next_phase(
-            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            vk::AccessFlags2::COLOR_ATTACHMENT_READ
-            | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-        );
-        unsafe { ctx.dev.cmd_pipeline_barrier2(cmd, &swap_barrier.dep_info()) };
 
         Ok(())
     }

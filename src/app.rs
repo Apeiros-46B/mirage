@@ -92,6 +92,7 @@ impl App {
         });
     }
 
+    #[allow(dead_code)]
     fn suspend_workers(&mut self) {
         self.renderer.suspend();
         self.game.suspend();

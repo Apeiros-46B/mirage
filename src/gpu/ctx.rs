@@ -77,6 +77,9 @@ fn create_dev(
     let features = vk::PhysicalDeviceFeatures::default()
         .shader_int64(true);
 
+    let mut features_11 = vk::PhysicalDeviceVulkan11Features::default()
+        .shader_draw_parameters(true);
+
     let mut features_12 = vk::PhysicalDeviceVulkan12Features::default()
         // bindless
         .descriptor_binding_partially_bound(true)
@@ -97,6 +100,7 @@ fn create_dev(
         .queue_create_infos(&qu_cis)
         .enabled_extension_names(&DEV_EXTS)
         .enabled_features(&features)
+        .push_next(&mut features_11)
         .push_next(&mut features_12)
         .push_next(&mut features_13);
 

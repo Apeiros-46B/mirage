@@ -1,4 +1,4 @@
-use egui::{Color32, Context, Ui, Window};
+use egui::{Color32, Context, Shadow, Ui, Window};
 use egui_plot::{Line, Plot, PlotBounds, PlotPoints, VLine};
 use winit::event_loop::ActiveEventLoop;
 
@@ -56,6 +56,11 @@ impl UIResponse {
 }
 
 pub fn ui_main(state: &UIState, resp: &mut UIResponse, ctx: &Context) {
+    ctx.style_mut(|style| {
+        style.visuals.window_shadow.offset = [0, 0];
+        style.visuals.popup_shadow.offset = [0, 0];
+    });
+
     Window::new("Debug").show(
         ctx,
         |ui| debug_window(state, resp, ui),

@@ -314,6 +314,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
                 let (img, _) = self.textures.get(&id)
                     .expect("egui requested update for non-existent texture");
 
+                // TODO: transition to and back could be batched but this is fine for now
                 let mut barrier = vk::ImageMemoryBarrier2::default()
                     .image(img.img)
                     .subresource_range(subres_range)
@@ -325,8 +326,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
                     .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
 
                 unsafe {
-                    ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info());
-
+                    ctx.barrier(cmd, [barrier]);
                     ctx.dev.cmd_copy_buffer_to_image(
                         cmd,
                         staging.buf,
@@ -336,15 +336,13 @@ impl Task<FrameCtx<'_>> for EguiPass {
                     );
                 }
 
-                barrier = barrier.next_phase(
+                barrier.transition(
                     vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                     vk::PipelineStageFlags2::FRAGMENT_SHADER,
                     vk::AccessFlags2::SHADER_READ,
                 );
 
-                unsafe {
-                    ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info());
-                }
+                unsafe { ctx.barrier(cmd, [barrier]); }
                 // }}}
             } else {
                 // {{{ new image
@@ -368,7 +366,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
                     .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
 
                 unsafe {
-                    ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info());
+                    ctx.barrier(cmd, [barrier]);
                     ctx.dev.cmd_copy_buffer_to_image(
                         cmd,
                         staging.buf,
@@ -378,15 +376,12 @@ impl Task<FrameCtx<'_>> for EguiPass {
                     );
                 }
 
-                barrier = barrier.next_phase(
+                barrier.transition(
                     vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                     vk::PipelineStageFlags2::FRAGMENT_SHADER,
                     vk::AccessFlags2::SHADER_READ,
                 );
-
-                unsafe {
-                    ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info());
-                }
+                unsafe { ctx.barrier(cmd, [barrier]) };
 
                 let desc_set_info = vk::DescriptorSetAllocateInfo::default()
                     .descriptor_pool(self.desc_pool)

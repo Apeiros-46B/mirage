@@ -9,7 +9,7 @@ use std::{sync::Arc, time::Duration};
 use crate::{
     gpu::{ctx::{Destroy, VulkanCtx}, desc::DescriptorAllocator, img::AllocatedImage, sync::ImageBarrierExt, task::Task},
     sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
-    workers::renderer::frames::PerFrame,
+    workers::renderer::{frames::PerFrame, passes::blit::BlitPass},
 };
 use super::msgs::{
     CameraState,
@@ -47,6 +47,7 @@ pub struct RendererState {
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
     primary_pass: PrimaryPass,
+    blit_pass: BlitPass,
     egui_pass: EguiPass,
 
     app_tx: RendererToApp,
@@ -111,6 +112,7 @@ impl Worker for Renderer {
         let clear_pass = ClearPass;
         let depth_prepass = DepthPrepass::new(&ctx)?;
         let primary_pass = PrimaryPass::new(&ctx, desc_alloc.get_bind_info())?;
+        let blit_pass = BlitPass;
         let egui_pass = EguiPass::new(&ctx, manager.swapchain.fmt)?;
 
         Ok(RendererState {
@@ -126,6 +128,7 @@ impl Worker for Renderer {
             clear_pass,
             depth_prepass,
             primary_pass,
+            blit_pass,
             egui_pass,
 
             app_tx: init.app_tx,
@@ -210,7 +213,8 @@ impl Worker for Renderer {
                 .subresource_range(DEPTH_SUBRES_RANGE)
                 .begin(
                     vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
-                    vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS,
+                    vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                    | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
                     vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
                 );
             this.ctx.barrier(cmd, [depth_barrier]);
@@ -226,13 +230,32 @@ impl Worker for Renderer {
                 );
             depth_barrier.transition(
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
-                | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+                vk::PipelineStageFlags2::COMPUTE_SHADER,
                 vk::AccessFlags2::SHADER_SAMPLED_READ,
             );
             this.ctx.barrier(cmd, [depth_barrier, color_barrier]);
             this.primary_pass.execute(&this.ctx, &mut frame)?;
 
+            color_barrier.transition(
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::PipelineStageFlags2::BLIT,
+                vk::AccessFlags2::TRANSFER_READ,
+            );
+            swap_barrier.transition(
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::PipelineStageFlags2::BLIT,
+                vk::AccessFlags2::TRANSFER_WRITE,
+            );
+            this.ctx.barrier(cmd, [color_barrier, swap_barrier]);
+            this.blit_pass.execute(&this.ctx, &mut frame)?;
+
+            swap_barrier.transition(
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                vk::AccessFlags2::COLOR_ATTACHMENT_READ
+                | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            );
+            this.ctx.barrier(cmd, [swap_barrier]);
             this.egui_pass.execute(&this.ctx, &mut frame)?;
 
             swap_barrier.transition(
