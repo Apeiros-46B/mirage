@@ -4,7 +4,6 @@ use crate::{
     gpu::{
         ctx::{Destroy, VulkanCtx},
         img::AllocatedImage,
-        sync::ImageBarrierExt,
         task::Task,
     },
     workers::renderer::{FrameCtx, frames::PerFrame},
@@ -139,18 +138,6 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
         frame: &mut FrameCtx,
     ) -> anyhow::Result<()> {
         let cmd = frame.in_flight.cmd;
-
-        let barrier = vk::ImageMemoryBarrier2::default()
-            .image(frame.depth.img)
-            .subresource_range(DEPTH_SUBRES_RANGE)
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-            .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-            .dst_stage_mask(vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS)
-            .src_access_mask(vk::AccessFlags2::NONE)
-            .dst_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE);
-
-        unsafe { ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info()) };
 
         // render depth only, cleared to 1.0
         let depth_atmt = vk::RenderingAttachmentInfo::default()

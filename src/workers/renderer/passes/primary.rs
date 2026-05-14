@@ -19,7 +19,7 @@ use super::depth::DEPTH_SUBRES_RANGE;
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/primary-pass.spv"));
 
-const COLOR_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
+pub const COLOR_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
     aspect_mask: vk::ImageAspectFlags::COLOR,
     base_mip_level: 0,
     level_count: 1,
@@ -114,35 +114,7 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
     ) -> anyhow::Result<()> {
         let cmd = frame.in_flight.cmd;
 
-        let depth_barrier = vk::ImageMemoryBarrier2::default()
-            .image(frame.depth.img)
-            .subresource_range(DEPTH_SUBRES_RANGE)
-            .old_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .src_stage_mask(
-                vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
-                | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS
-            )
-            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-            .src_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
-            .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ);
-        let mut color_barrier = vk::ImageMemoryBarrier2::default()
-            .image(frame.color.img)
-            .subresource_range(COLOR_SUBRES_RANGE)
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .src_stage_mask(vk::PipelineStageFlags2::BLIT)
-            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-            .src_access_mask(vk::AccessFlags2::NONE)
-            .dst_access_mask(vk::AccessFlags2::SHADER_WRITE);
-
         unsafe {
-            ctx.dev.cmd_pipeline_barrier2(
-                cmd,
-                &vk::DependencyInfo::default()
-                    .image_memory_barriers(&[depth_barrier, color_barrier]),
-            );
-
             ctx.dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, self.pipeline);
             ctx.dev.cmd_bind_descriptor_sets(
                 cmd,

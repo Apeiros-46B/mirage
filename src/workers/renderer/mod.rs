@@ -20,10 +20,10 @@ use super::msgs::{
     RendererToApp,
 };
 use passes::{
-    depth::{DepthPrepass, make_depth_targets},
+    depth::{DepthPrepass, make_depth_targets, DEPTH_SUBRES_RANGE},
     egui::EguiPass,
     frame::ClearPass,
-    primary::{PrimaryPass, make_color_targets},
+    primary::{PrimaryPass, make_color_targets, COLOR_SUBRES_RANGE},
 };
 use frames::{FrameManager, RenderTarget};
 
@@ -203,10 +203,34 @@ impl Worker for Renderer {
                 // don't use TOP_OF_PIPE default for swapchain images
                 .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT);
             this.ctx.barrier(cmd, [swap_barrier]);
-
             this.clear_pass.execute(&this.ctx, &mut frame)?;
 
+            let mut depth_barrier = vk::ImageMemoryBarrier2::default()
+                .image(frame.depth.img)
+                .subresource_range(DEPTH_SUBRES_RANGE)
+                .begin(
+                    vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
+                    vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS,
+                    vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                );
+            this.ctx.barrier(cmd, [depth_barrier]);
             this.depth_prepass.execute(&this.ctx, &mut frame)?;
+
+            let mut color_barrier = vk::ImageMemoryBarrier2::default()
+                .image(frame.color.img)
+                .subresource_range(COLOR_SUBRES_RANGE)
+                .begin(
+                    vk::ImageLayout::GENERAL,
+                    vk::PipelineStageFlags2::COMPUTE_SHADER,
+                    vk::AccessFlags2::SHADER_WRITE,
+                );
+            depth_barrier.transition(
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+                vk::AccessFlags2::SHADER_SAMPLED_READ,
+            );
+            this.ctx.barrier(cmd, [depth_barrier, color_barrier]);
             this.primary_pass.execute(&this.ctx, &mut frame)?;
 
             this.egui_pass.execute(&this.ctx, &mut frame)?;
