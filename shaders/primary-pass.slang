@@ -10,8 +10,8 @@ struct PushConstants {
 [[vk::push_constant]]
 ConstantBuffer<PushConstants> push;
 
-[[vk::binding(0, 1)]] Texture2D<float> depthTextures[];
-[[vk::binding(0, 2)]] RWTexture2D<float4> colorTextures[];
+[[vk::binding(1, 0)]] Texture2D<float> depthTextures[];
+[[vk::binding(2, 0)]] RWTexture2D<float4> colorTextures[];
 
 [shader("compute")]
 [numthreads(16, 16, 1)]

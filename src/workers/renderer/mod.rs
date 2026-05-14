@@ -41,8 +41,6 @@ pub struct RendererState {
     depth_targets: PerFrame<AllocatedImage>,
     color_targets: PerFrame<AllocatedImage>,
 
-    depth_sampler: vk::Sampler,
-    depth_sampler_idx: u32,
     depth_idxs: PerFrame<u32>,
     color_storage_idxs: PerFrame<u32>,
 
@@ -88,7 +86,6 @@ pub struct FrameCtx<'a> {
 
     pub depth: &'a AllocatedImage,
     pub color: &'a AllocatedImage,
-    pub depth_sampler_idx: u32,
     pub depth_idx: u32,
     pub color_storage_idx: u32,
 }
@@ -107,15 +104,6 @@ impl Worker for Renderer {
         let depth_targets = make_depth_targets(&ctx, extent)?;
         let color_targets = make_color_targets(&ctx, extent)?;
 
-        let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
-        let depth_sampler = unsafe { ctx.dev.create_sampler(&sampler_info, None)? };
-
-        let depth_sampler_idx = desc_alloc.alloc_sampler(depth_sampler);
         let depth_idxs = PerFrame::from(desc_alloc.alloc_sampled_imgs(&depth_targets));
         let color_storage_idxs = PerFrame::from(
             desc_alloc.alloc_storage_imgs(&color_targets),
@@ -134,8 +122,6 @@ impl Worker for Renderer {
             depth_targets,
             color_targets,
 
-            depth_sampler,
-            depth_sampler_idx,
             depth_idxs,
             color_storage_idxs,
 
@@ -204,7 +190,6 @@ impl Worker for Renderer {
             depth: &this.depth_targets[fif],
             color: &this.color_targets[fif],
 
-            depth_sampler_idx: this.depth_sampler_idx,
             depth_idx: this.depth_idxs[fif],
             color_storage_idx: this.color_storage_idxs[fif],
         };

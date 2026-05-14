@@ -70,6 +70,7 @@ impl PrimaryPass {
             .push_constant_ranges(std::slice::from_ref(&push_range));
 
         let layout = unsafe { ctx.dev.create_pipeline_layout(&layout_info, None)? };
+        ctx.debug.set_name(layout, c"primary pipe layout")?;
 
         let compute_stage_info = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
@@ -91,8 +92,11 @@ impl PrimaryPass {
                 Err(_) => bail!("couldn't create pipelines")
             }
         };
+        ctx.debug.set_name(pipeline, c"primary pipe")?;
 
-        unsafe { ctx.dev.destroy_shader_module(module, None); }
+        unsafe {
+            ctx.dev.destroy_shader_module(module, None);
+        }
 
         Ok(Self {
             desc_set: desc_bind_info.set,
@@ -176,6 +180,12 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
             vk::PipelineStageFlags2::BLIT,
             vk::AccessFlags2::TRANSFER_READ,
         );
+
+        // TODO: this barrier is wrong and causes validation errors.
+        // we need a better barrier tracking system. perhaps move barriers out into the
+        // renderer main so sync is centralized, and ensure that each pass only does
+        // one barrier? might be painful with egui pass, have to split that. splitting
+        // this pass into dispatch and blit is ez tho
         let swap_barrier = vk::ImageMemoryBarrier2::default()
             .image(frame.in_flight.img.img)
             .subresource_range(COLOR_SUBRES_RANGE)
@@ -187,11 +197,13 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
             .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
 
         unsafe {
+            ctx.debug.begin_label(cmd, c"swap barrier");
             ctx.dev.cmd_pipeline_barrier2(
                 cmd,
                 &vk::DependencyInfo::default()
                     .image_memory_barriers(&[swap_barrier, color_barrier]),
             );
+            ctx.debug.end_label(cmd);
 
             let blit_ofs = [
                 vk::Offset3D::default()
@@ -237,8 +249,8 @@ pub fn make_color_targets(
         AllocatedImage::new(
             ctx,
             extent.into(),
-            vk::Format::R8G8B8A8_SRGB,
-            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
+            vk::Format::R8G8B8A8_UNORM,
+            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
             COLOR_SUBRES_RANGE,
             "primary_pass_out",
         )

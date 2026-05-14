@@ -34,4 +34,7 @@ float4 vsh(uint vertexID : SV_VertexID) : SV_Position {
 }
 
 [shader("fragment")]
-void fsh() {}
+[earlydepthstencil]
+void fsh() {
+	// dummy shader, some platforms (Windows) don't like it when you don't have fsh
+}

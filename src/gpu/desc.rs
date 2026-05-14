@@ -31,6 +31,10 @@ impl Drop for DescriptorAllocator {
     }
 }
 
+const SAMPLER_BINDING: u32 = 0;
+const SAMPLED_IMG_BINDING: u32 = 1;
+const STORAGE_IMG_BINDING: u32 = 2;
+
 impl DescriptorAllocator {
     pub fn new(ctx: Arc<VulkanCtx>) -> anyhow::Result<Self> {
         let pool_sizes = [
@@ -52,31 +56,40 @@ impl DescriptorAllocator {
 
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
+                .binding(SAMPLER_BINDING)
+                // BUG: missing stage flags
                 .descriptor_type(vk::DescriptorType::SAMPLER)
                 .descriptor_count(100_000),
             vk::DescriptorSetLayoutBinding::default()
+                .binding(SAMPLED_IMG_BINDING)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(100_000),
             vk::DescriptorSetLayoutBinding::default()
+                .binding(STORAGE_IMG_BINDING)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(100_000),
         ];
+        let flags = vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                  | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND;
+        let flags_array = [flags, flags, flags];
         let mut binding_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
-            .binding_flags(&[
-                vk::DescriptorBindingFlags::PARTIALLY_BOUND,
-                vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-            ]);
+            .binding_flags(&flags_array);
         let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
+            .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
             .bindings(&bindings)
             .push_next(&mut binding_info);
         let layout = unsafe {
             ctx.dev.create_descriptor_set_layout(&layout_info, None)?
         };
+        ctx.debug.set_name(layout, c"main set layout")?;
 
         let desc_set_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(pool)
             .set_layouts(std::slice::from_ref(&layout));
         let desc_sets = unsafe { ctx.dev.allocate_descriptor_sets(&desc_set_info)? };
+        ctx.debug.set_name(desc_sets[0], c"main set")?;
 
         Ok(Self {
             ctx,

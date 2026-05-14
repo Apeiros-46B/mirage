@@ -285,6 +285,8 @@ impl Swapchain {
         // try block would be nice here
         let result = (|| -> anyhow::Result<()> {
             for img in raw {
+                ctx.debug.set_name(img, c"swap img");
+
                 let view = unsafe {
                     ctx.dev.create_image_view(
                         &vk::ImageViewCreateInfo::default()
@@ -358,6 +360,10 @@ impl FrameManager {
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(FRAMES_IN_FLIGHT as u32);
         let cmd_bufs = unsafe { ctx.dev.allocate_command_buffers(&cmd_info)? };
+
+        for cmd in &cmd_bufs {
+            ctx.debug.set_name(*cmd, c"swap cmd")?;
+        }
 
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
         let sem_info = vk::SemaphoreCreateInfo::default();
