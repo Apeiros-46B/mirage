@@ -12,7 +12,7 @@ use crate::{
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/depth-prepass.spv"));
 
-const DEPTH_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
+pub const DEPTH_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
     aspect_mask: vk::ImageAspectFlags::DEPTH,
     base_mip_level: 0,
     level_count: 1,
@@ -140,7 +140,7 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
     ) -> anyhow::Result<()> {
         let cmd = frame.in_flight.cmd;
 
-        let mut barrier = vk::ImageMemoryBarrier2::default()
+        let barrier = vk::ImageMemoryBarrier2::default()
             .image(frame.depth.img)
             .subresource_range(DEPTH_SUBRES_RANGE)
             .old_layout(vk::ImageLayout::UNDEFINED)
@@ -192,14 +192,6 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
             ctx.dev.cmd_draw(cmd, 36, 1, 0, 0);
             ctx.dev.cmd_end_rendering(cmd);
         }
-
-        barrier = barrier.next_phase(
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::PipelineStageFlags2::COMPUTE_SHADER,
-            vk::AccessFlags2::SHADER_READ,
-        );
-
-        unsafe { ctx.dev.cmd_pipeline_barrier2(cmd, &barrier.dep_info()); }
 
         Ok(())
     }

@@ -486,6 +486,7 @@ impl FrameManager {
 // }}}
 
 // {{{ utility for storing resources per frame in flight
+#[derive(Debug)]
 pub struct PerFrame<T> {
     items: [T; FRAMES_IN_FLIGHT],
 }

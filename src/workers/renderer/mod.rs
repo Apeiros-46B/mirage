@@ -7,7 +7,7 @@ use winit::dpi::PhysicalSize;
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    gpu::{ctx::{Destroy, VulkanCtx}, img::AllocatedImage, task::Task},
+    gpu::{ctx::{Destroy, VulkanCtx}, desc::DescriptorAllocator, img::AllocatedImage, task::Task},
     sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
     workers::renderer::frames::PerFrame,
 };
@@ -35,10 +35,16 @@ pub struct RendererInit {
 }
 
 pub struct RendererState {
+    desc_alloc: DescriptorAllocator,
     manager: FrameManager,
 
     depth_targets: PerFrame<AllocatedImage>,
     color_targets: PerFrame<AllocatedImage>,
+
+    depth_sampler: vk::Sampler,
+    depth_sampler_idx: u32,
+    depth_idxs: PerFrame<u32>,
+    color_storage_idxs: PerFrame<u32>,
 
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
@@ -82,6 +88,9 @@ pub struct FrameCtx<'a> {
 
     pub depth: &'a AllocatedImage,
     pub color: &'a AllocatedImage,
+    pub depth_sampler_idx: u32,
+    pub depth_idx: u32,
+    pub color_storage_idx: u32,
 }
 
 impl Worker for Renderer {
@@ -92,22 +101,43 @@ impl Worker for Renderer {
     fn on_resume(&self, init: Self::Init) -> anyhow::Result<Self::State> {
         let ctx = init.ctx;
         let extent = vk::Extent2D { width: init.sz.width, height: init.sz.height };
+        let mut desc_alloc = DescriptorAllocator::new(ctx.clone())?;
         let manager = FrameManager::new(ctx.clone(), init.sz)?;
 
         let depth_targets = make_depth_targets(&ctx, extent)?;
         let color_targets = make_color_targets(&ctx, extent)?;
 
+        let sampler_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+        let depth_sampler = unsafe { ctx.dev.create_sampler(&sampler_info, None)? };
+
+        let depth_sampler_idx = desc_alloc.alloc_sampler(depth_sampler);
+        let depth_idxs = PerFrame::from(desc_alloc.alloc_sampled_imgs(&depth_targets));
+        let color_storage_idxs = PerFrame::from(
+            desc_alloc.alloc_storage_imgs(&color_targets),
+        );
+
         let clear_pass = ClearPass;
         let depth_prepass = DepthPrepass::new(&ctx)?;
-        let primary_pass = PrimaryPass::new(&ctx)?;
+        let primary_pass = PrimaryPass::new(&ctx, desc_alloc.get_bind_info())?;
         let egui_pass = EguiPass::new(&ctx, manager.swapchain.fmt)?;
         let present_pass = PresentPass;
 
         Ok(RendererState {
+            desc_alloc,
             manager,
 
             depth_targets,
             color_targets,
+
+            depth_sampler,
+            depth_sampler_idx,
+            depth_idxs,
+            color_storage_idxs,
 
             clear_pass,
             depth_prepass,
@@ -141,11 +171,21 @@ impl Worker for Renderer {
 
         if target.did_resize {
             unsafe {
+                this.ctx.dev.device_wait_idle()?;
+
                 this.depth_targets.destroy(&this.ctx);
                 this.depth_targets = make_depth_targets(&this.ctx, target.img.extent)?;
+                this.desc_alloc.update_sampled_imgs(
+                    this.depth_idxs[0],
+                    &this.depth_targets,
+                );
 
                 this.color_targets.destroy(&this.ctx);
                 this.color_targets = make_color_targets(&this.ctx, target.img.extent)?;
+                this.desc_alloc.update_storage_imgs(
+                    this.color_storage_idxs[0],
+                    &this.color_targets,
+                );
             }
         }
 
@@ -163,6 +203,10 @@ impl Worker for Renderer {
 
             depth: &this.depth_targets[fif],
             color: &this.color_targets[fif],
+
+            depth_sampler_idx: this.depth_sampler_idx,
+            depth_idx: this.depth_idxs[fif],
+            color_storage_idx: this.color_storage_idxs[fif],
         };
 
         unsafe {
