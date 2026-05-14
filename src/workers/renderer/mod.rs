@@ -7,7 +7,7 @@ use winit::dpi::PhysicalSize;
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    gpu::{ctx::{Destroy, VulkanCtx}, desc::DescriptorAllocator, img::AllocatedImage, task::Task},
+    gpu::{ctx::{Destroy, VulkanCtx}, desc::DescriptorAllocator, img::AllocatedImage, sync::ImageBarrierExt, task::Task},
     sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
     workers::renderer::frames::PerFrame,
 };
@@ -22,7 +22,7 @@ use super::msgs::{
 use passes::{
     depth::{DepthPrepass, make_depth_targets},
     egui::EguiPass,
-    frame::{ClearPass, PresentPass},
+    frame::ClearPass,
     primary::{PrimaryPass, make_color_targets},
 };
 use frames::{FrameManager, RenderTarget};
@@ -48,7 +48,6 @@ pub struct RendererState {
     depth_prepass: DepthPrepass,
     primary_pass: PrimaryPass,
     egui_pass: EguiPass,
-    present_pass: PresentPass,
 
     app_tx: RendererToApp,
     camera_rx: Output<CameraState>,
@@ -113,7 +112,6 @@ impl Worker for Renderer {
         let depth_prepass = DepthPrepass::new(&ctx)?;
         let primary_pass = PrimaryPass::new(&ctx, desc_alloc.get_bind_info())?;
         let egui_pass = EguiPass::new(&ctx, manager.swapchain.fmt)?;
-        let present_pass = PresentPass;
 
         Ok(RendererState {
             desc_alloc,
@@ -129,7 +127,6 @@ impl Worker for Renderer {
             depth_prepass,
             primary_pass,
             egui_pass,
-            present_pass,
 
             app_tx: init.app_tx,
             camera_rx: init.camera_rx,
@@ -195,12 +192,31 @@ impl Worker for Renderer {
         };
 
         unsafe {
+            let cmd = frame.in_flight.cmd;
+
+            let mut swap_barrier = frame.in_flight.base_barrier
+                .begin(
+                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                    vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                )
+                // don't use TOP_OF_PIPE default for swapchain images
+                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT);
+            this.ctx.barrier(cmd, [swap_barrier]);
+
             this.clear_pass.execute(&this.ctx, &mut frame)?;
+
             this.depth_prepass.execute(&this.ctx, &mut frame)?;
             this.primary_pass.execute(&this.ctx, &mut frame)?;
 
             this.egui_pass.execute(&this.ctx, &mut frame)?;
-            this.present_pass.execute(&this.ctx, &mut frame)?;
+
+            swap_barrier.transition(
+                vk::ImageLayout::PRESENT_SRC_KHR,
+                vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+                vk::AccessFlags2::NONE,
+            );
+            this.ctx.barrier(cmd, [swap_barrier]);
         }
 
         this.manager.submit_frame(&this.ctx)

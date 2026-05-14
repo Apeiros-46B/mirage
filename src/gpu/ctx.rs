@@ -181,6 +181,20 @@ impl VulkanCtx {
             entry,
         })
     }
+
+    pub unsafe fn barrier<const N: usize>(
+        &self,
+        cmd: vk::CommandBuffer,
+        barriers: [vk::ImageMemoryBarrier2<'_>; N],
+    ) {
+        unsafe {
+            self.dev.cmd_pipeline_barrier2(
+                cmd,
+                &vk::DependencyInfo::default()
+                    .image_memory_barriers(&barriers),
+            );
+        }
+    }
 }
 
 impl Drop for VulkanCtx {
