@@ -6,25 +6,12 @@ use crate::{
     gpu::{
         ctx::{Destroy, VulkanCtx},
         desc::DescriptorBindInfo,
-        img::AllocatedImage,
-        sync::ImageBarrierExt,
         task::Task,
     },
-    workers::renderer::{
-        FrameCtx,
-        frames::PerFrame,
-    },
+    workers::renderer::FrameCtx,
 };
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/primary-pass.spv"));
-
-pub const COLOR_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
-    aspect_mask: vk::ImageAspectFlags::COLOR,
-    base_mip_level: 0,
-    level_count: 1,
-    base_array_layer: 0,
-    layer_count: 1,
-};
 
 pub struct PrimaryPass {
     desc_set: vk::DescriptorSet,
@@ -55,6 +42,7 @@ impl PrimaryPass {
         ctx: &VulkanCtx,
         desc_bind_info: DescriptorBindInfo,
     ) -> anyhow::Result<Self> {
+        // TODO: reloadable shader
         let code = ash::util::read_spv(&mut std::io::Cursor::new(SPV))?;
         let shader_info = vk::ShaderModuleCreateInfo::default().code(&code);
         let module = unsafe { ctx.dev.create_shader_module(&shader_info, None)? };
@@ -148,20 +136,4 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
 
         Ok(())
     }
-}
-
-pub fn make_color_targets(
-    ctx: &VulkanCtx,
-    extent: vk::Extent2D,
-) -> anyhow::Result<PerFrame<AllocatedImage>> {
-    PerFrame::try_init(|_| {
-        AllocatedImage::new(
-            ctx,
-            extent.into(),
-            vk::Format::R8G8B8A8_UNORM,
-            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
-            COLOR_SUBRES_RANGE,
-            "primary_pass_out",
-        )
-    })
 }

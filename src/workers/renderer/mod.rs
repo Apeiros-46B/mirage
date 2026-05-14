@@ -7,9 +7,14 @@ use winit::dpi::PhysicalSize;
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    gpu::{ctx::{Destroy, VulkanCtx}, desc::DescriptorAllocator, img::AllocatedImage, sync::ImageBarrierExt, task::Task},
+    gpu::{
+        ctx::{Destroy, VulkanCtx},
+        desc::DescriptorAllocator,
+        img::AllocatedImage,
+        sync::ImageBarrierExt,
+        task::Task,
+    },
     sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
-    workers::renderer::{frames::PerFrame, passes::blit::BlitPass},
 };
 use super::msgs::{
     CameraState,
@@ -20,12 +25,13 @@ use super::msgs::{
     RendererToApp,
 };
 use passes::{
-    depth::{DepthPrepass, make_depth_targets, DEPTH_SUBRES_RANGE},
+    blit::BlitPass,
+    depth::DepthPrepass,
     egui::EguiPass,
     frame::ClearPass,
-    primary::{PrimaryPass, make_color_targets, COLOR_SUBRES_RANGE},
+    primary::PrimaryPass,
 };
-use frames::{FrameManager, RenderTarget};
+use frames::{FrameManager, PerFrame, RenderTarget};
 
 pub struct RendererInit {
     pub sz: PhysicalSize<u32>,
@@ -104,10 +110,8 @@ impl Worker for Renderer {
         let depth_targets = make_depth_targets(&ctx, extent)?;
         let color_targets = make_color_targets(&ctx, extent)?;
 
-        let depth_idxs = PerFrame::from(desc_alloc.alloc_sampled_imgs(&depth_targets));
-        let color_storage_idxs = PerFrame::from(
-            desc_alloc.alloc_storage_imgs(&color_targets),
-        );
+        let depth_idxs = desc_alloc.alloc_sampled_imgs(&depth_targets).into();
+        let color_storage_idxs = desc_alloc.alloc_storage_imgs(&color_targets).into();
 
         let clear_pass = ClearPass;
         let depth_prepass = DepthPrepass::new(&ctx)?;
@@ -282,4 +286,52 @@ impl MessageHandler<EguiUpdate> for RendererState {
     fn handle(&mut self, msg: EguiUpdate) {
         self.egui_pass.apply_update(msg);
     }
+}
+
+const DEPTH_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
+    aspect_mask: vk::ImageAspectFlags::DEPTH,
+    base_mip_level: 0,
+    level_count: 1,
+    base_array_layer: 0,
+    layer_count: 1,
+};
+
+fn make_depth_targets(
+    ctx: &VulkanCtx,
+    extent: vk::Extent2D,
+) -> anyhow::Result<PerFrame<AllocatedImage>> {
+    PerFrame::try_init(|_| {
+        AllocatedImage::new(
+            ctx,
+            extent.into(),
+            vk::Format::D32_SFLOAT,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            DEPTH_SUBRES_RANGE,
+            "depth_prepass_out",
+        )
+    })
+}
+
+const COLOR_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
+    aspect_mask: vk::ImageAspectFlags::COLOR,
+    base_mip_level: 0,
+    level_count: 1,
+    base_array_layer: 0,
+    layer_count: 1,
+};
+
+fn make_color_targets(
+    ctx: &VulkanCtx,
+    extent: vk::Extent2D,
+) -> anyhow::Result<PerFrame<AllocatedImage>> {
+    PerFrame::try_init(|_| {
+        AllocatedImage::new(
+            ctx,
+            extent.into(),
+            vk::Format::R8G8B8A8_UNORM,
+            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+            COLOR_SUBRES_RANGE,
+            "primary_pass_out",
+        )
+    })
 }

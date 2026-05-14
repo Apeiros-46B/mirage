@@ -3,21 +3,12 @@ use ash::vk;
 use crate::{
     gpu::{
         ctx::{Destroy, VulkanCtx},
-        img::AllocatedImage,
         task::Task,
     },
-    workers::renderer::{FrameCtx, frames::PerFrame},
+    workers::renderer::FrameCtx,
 };
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/depth-prepass.spv"));
-
-pub const DEPTH_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
-    aspect_mask: vk::ImageAspectFlags::DEPTH,
-    base_mip_level: 0,
-    level_count: 1,
-    base_array_layer: 0,
-    layer_count: 1,
-};
 
 pub struct DepthPrepass {
     pipeline: vk::Pipeline,
@@ -195,20 +186,4 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
 
         Ok(())
     }
-}
-
-pub fn make_depth_targets(
-    ctx: &VulkanCtx,
-    extent: vk::Extent2D,
-) -> anyhow::Result<PerFrame<AllocatedImage>> {
-    PerFrame::try_init(|_| {
-        AllocatedImage::new(
-            ctx,
-            extent.into(),
-            vk::Format::D32_SFLOAT,
-            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-            DEPTH_SUBRES_RANGE,
-            "depth_prepass_out",
-        )
-    })
 }
