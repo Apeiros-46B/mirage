@@ -20,7 +20,8 @@ const IMG_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
 
 // {{{ image and sync data
 pub struct RenderTarget<'a> {
-    pub arena: &'a mut GPUArena,
+    /// automatically cleared after every frame
+    pub tmp_arena: &'a mut GPUArena,
     pub img: RenderImage,
     pub cmd: vk::CommandBuffer,
     pub idx: usize,
@@ -432,7 +433,7 @@ impl FrameManager {
         }
 
         Ok(Some(RenderTarget {
-            arena: &mut frame.alloc,
+            tmp_arena: &mut frame.alloc,
             did_resize,
             idx: self.frame_idx,
             cmd: frame.cmd,

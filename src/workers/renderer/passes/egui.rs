@@ -277,7 +277,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
             };
 
             let staging_sz = pixels.len() as u64;
-            let staging = frame.in_flight.arena.alloc(staging_sz, 16);
+            let staging = frame.in_flight.tmp_arena.alloc(staging_sz, 16);
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     pixels.as_ptr(),
@@ -427,8 +427,8 @@ impl Task<FrameCtx<'_>> for EguiPass {
             }
         }
 
-        let vbo = frame.in_flight.arena.alloc(total_vert_sz as u64, 16);
-        let ibo = frame.in_flight.arena.alloc(total_idx_sz as u64, 16);
+        let vbo = frame.in_flight.tmp_arena.alloc(total_vert_sz as u64, 16);
+        let ibo = frame.in_flight.tmp_arena.alloc(total_idx_sz as u64, 16);
         let mut vert_ptr = vbo.ptr.0;
         let mut idx_ptr = ibo.ptr.0;
 

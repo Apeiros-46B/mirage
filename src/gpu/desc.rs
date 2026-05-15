@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ash::vk;
 
-use crate::gpu::{ctx::VulkanCtx, img::AllocatedImage};
+use crate::gpu::{ctx::{Destroy, VulkanCtx}, img::AllocatedImage};
 
 pub struct DescriptorBindInfo {
     pub set: vk::DescriptorSet,
@@ -11,7 +11,6 @@ pub struct DescriptorBindInfo {
 
 // TODO: no way to free, but we don't need that yet since no dynamic resources
 pub struct DescriptorAllocator {
-    // TODO: I'm not sure if this should actually store the VulkanCtx
     ctx: Arc<VulkanCtx>,
     pool: vk::DescriptorPool,
     set: vk::DescriptorSet,
@@ -22,11 +21,11 @@ pub struct DescriptorAllocator {
     storage_img_count: u32,
 }
 
-impl Drop for DescriptorAllocator {
-    fn drop(&mut self) {
+impl Destroy for DescriptorAllocator {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
         unsafe {
-            self.ctx.dev.destroy_descriptor_pool(self.pool, None);
-            self.ctx.dev.destroy_descriptor_set_layout(self.layout, None);
+            ctx.dev.destroy_descriptor_pool(self.pool, None);
+            ctx.dev.destroy_descriptor_set_layout(self.layout, None);
         }
     }
 }

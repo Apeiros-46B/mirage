@@ -17,8 +17,8 @@ impl Task<FrameCtx<'_>> for BlitPass {
         let blit_ofs = [
             vk::Offset3D::default(),
             vk::Offset3D::default()
-                .x(frame.color.extent.width as i32)
-                .y(frame.color.extent.height as i32)
+                .x(frame.resources.color.extent.width as i32)
+                .y(frame.resources.color.extent.height as i32)
                 .z(1),
         ];
         let blit_subres = vk::ImageSubresourceLayers::default()
@@ -30,7 +30,7 @@ impl Task<FrameCtx<'_>> for BlitPass {
         unsafe {
             ctx.dev.cmd_blit_image(
                 frame.in_flight.cmd,
-                frame.color.img,
+                frame.resources.color.img,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 frame.in_flight.img.img,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,

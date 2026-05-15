@@ -117,15 +117,15 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
                 vk::ShaderStageFlags::COMPUTE,
                 0,
                 bytemuck::bytes_of(&PushConstants {
-                    camera_bda: frame.camera_bda,
+                    camera_bda: frame.resources.camera_bda,
                     world_bda: 0,
-                    depth_idx: frame.depth_idx,
-                    color_storage_idx: frame.color_storage_idx,
+                    depth_idx: frame.resources.depth_idx,
+                    color_storage_idx: frame.resources.color_idx,
                 }),
             );
 
             let group_sz = 16;
-            let extent = frame.color.extent;
+            let extent = frame.resources.color.extent;
             ctx.dev.cmd_dispatch(
                 cmd,
                 (extent.width + group_sz - 1) / group_sz,

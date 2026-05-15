@@ -1,4 +1,4 @@
-use egui::{Color32, Context, Shadow, Ui, Window};
+use egui::{Color32, Context, Ui, Window};
 use egui_plot::{Line, Plot, PlotBounds, PlotPoints, VLine};
 use winit::event_loop::ActiveEventLoop;
 

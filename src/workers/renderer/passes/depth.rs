@@ -129,7 +129,7 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
 
         // render depth only, cleared to 1.0
         let depth_atmt = vk::RenderingAttachmentInfo::default()
-            .image_view(frame.depth.view)
+            .image_view(frame.resources.depth.view)
             .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)
@@ -154,7 +154,7 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
                 self.layout,
                 vk::ShaderStageFlags::VERTEX,
                 0,
-                bytemuck::bytes_of(&[frame.camera_bda, self.world_bda]),
+                bytemuck::bytes_of(&[frame.resources.camera_bda, self.world_bda]),
             );
 
             let viewport = vk::Viewport {
