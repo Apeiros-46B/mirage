@@ -20,6 +20,8 @@ pub struct Resources {
     depth_idxs: PerFrame<u32>,
     color: PerFrame<AllocatedImage>,
     color_idxs: PerFrame<u32>,
+    visbuf: PerFrame<AllocatedImage>,
+    visbuf_idxs: PerFrame<u32>,
 
     camera_rx: Output<CameraState>,
 }
@@ -29,6 +31,7 @@ impl Destroy for Resources {
         unsafe {
             self.depth.destroy(ctx);
             self.color.destroy(ctx);
+            self.visbuf.destroy(ctx);
 
             self.desc.destroy(ctx);
         }
@@ -42,12 +45,15 @@ impl Resources {
         camera_rx: Output<CameraState>,
     ) -> anyhow::Result<Self> {
         let extent = vk::Extent2D { width: scr_sz.width, height: scr_sz.height };
+
         let depth = make_depth_targets(&ctx, extent)?;
         let color = make_color_targets(&ctx, extent)?;
+        let visbuf = make_visbuf_targets(&ctx, extent)?;
 
         let mut desc = DescriptorAllocator::new(ctx)?;
         let depth_idxs = desc.alloc_sampled_imgs(&depth).into();
         let color_idxs = desc.alloc_storage_imgs(&color).into();
+        let visbuf_idxs = desc.alloc_storage_imgs(&visbuf).into();
 
         Ok(Self {
             desc,
@@ -56,6 +62,8 @@ impl Resources {
             depth_idxs,
             color,
             color_idxs,
+            visbuf,
+            visbuf_idxs,
 
             camera_rx,
         })
@@ -74,6 +82,10 @@ impl Resources {
             self.color.destroy(ctx);
             self.color = make_color_targets(ctx, extent)?;
             self.desc.update_storage_imgs(self.color_idxs[0], &self.color);
+
+            self.visbuf.destroy(ctx);
+            self.visbuf = make_visbuf_targets(ctx, extent)?;
+            self.desc.update_storage_imgs(self.visbuf_idxs[0], &self.visbuf);
         }
 
         Ok(())
@@ -90,6 +102,8 @@ impl Resources {
             depth_idx: self.depth_idxs[target.idx],
             color: &self.color[target.idx],
             color_idx: self.color_idxs[target.idx],
+            visbuf: &self.visbuf[target.idx],
+            visbuf_idx: self.visbuf_idxs[target.idx],
         }
     }
 }
@@ -101,9 +115,31 @@ pub struct ResourceView<'a> {
     pub depth_idx: u32,
     pub color: &'a AllocatedImage,
     pub color_idx: u32,
+    pub visbuf: &'a AllocatedImage,
+    pub visbuf_idx: u32,
 }
 
-pub const DEPTH_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
+impl<'a, 'b> ResourceView<'a> {
+    pub fn depth_barrier(&self) -> vk::ImageMemoryBarrier2<'b> {
+        vk::ImageMemoryBarrier2::default()
+            .image(self.depth.img)
+            .subresource_range(DEPTH_SUBRES_RANGE)
+    }
+
+    pub fn color_barrier(&self) -> vk::ImageMemoryBarrier2<'b> {
+        vk::ImageMemoryBarrier2::default()
+            .image(self.color.img)
+            .subresource_range(COLOR_SUBRES_RANGE)
+    }
+
+    pub fn visbuf_barrier(&self) -> vk::ImageMemoryBarrier2<'b> {
+        vk::ImageMemoryBarrier2::default()
+            .image(self.visbuf.img)
+            .subresource_range(COLOR_SUBRES_RANGE)
+    }
+}
+
+const DEPTH_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
     aspect_mask: vk::ImageAspectFlags::DEPTH,
     base_mip_level: 0,
     level_count: 1,
@@ -122,12 +158,12 @@ fn make_depth_targets(
             vk::Format::D32_SFLOAT,
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             DEPTH_SUBRES_RANGE,
-            "depth target",
+            c"depth target",
         )
     })
 }
 
-pub const COLOR_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
+const COLOR_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
     aspect_mask: vk::ImageAspectFlags::COLOR,
     base_mip_level: 0,
     level_count: 1,
@@ -146,7 +182,7 @@ fn make_color_targets(
             vk::Format::R8G8B8A8_UNORM,
             vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
             COLOR_SUBRES_RANGE,
-            "color target",
+            c"color target",
         )
     })
 }
@@ -162,7 +198,7 @@ fn make_visbuf_targets(
             vk::Format::R64_UINT,
             vk::ImageUsageFlags::STORAGE,
             COLOR_SUBRES_RANGE,
-            "visbuf target",
+            c"visbuf target",
         )
     })
 }

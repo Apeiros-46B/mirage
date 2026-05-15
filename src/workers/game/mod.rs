@@ -6,11 +6,20 @@ use std::{sync::Arc, time::Duration};
 use triple_buffer::Input;
 use winit::dpi::PhysicalSize;
 
-use crate::{sync::{
-    chan::SafeSend,
-    worker::{MessageHandler, Worker, WorkerControl, WorkerExt},
-}, workers::msgs::AppMsg};
-use super::msgs::{CameraState, GameMsg, GameRxBundle, GameTelemetry, GameToApp};
+use crate::{
+    sync::{
+        chan::SafeSend,
+        worker::{MessageHandler, Worker, WorkerControl, WorkerExt},
+    },
+    workers::msgs::{
+        AppMsg,
+        CameraState,
+        GameMsg,
+        GameRxBundle,
+        GameTelemetry,
+        GameToApp,
+    },
+};
 use camera::Camera;
 use input::InputState;
 

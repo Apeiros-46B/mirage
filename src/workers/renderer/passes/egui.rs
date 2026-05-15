@@ -11,7 +11,11 @@ use crate::{
         sync::ImageBarrierExt,
         task::Task,
     },
-    workers::{msgs::EguiUpdate, renderer::{FrameCtx, frames::PerFrame}},
+    sync::worker::MessageHandler,
+    workers::{
+        msgs::EguiUpdate,
+        renderer::{FrameCtx, frames::PerFrame},
+    }
 };
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/egui-pass.spv"));
@@ -226,12 +230,14 @@ impl EguiPass {
             unused_desc_sets: PerFrame::init(|_| Vec::new()),
         })
     }
+}
 
-    pub fn apply_update(&mut self, upd: EguiUpdate) {
-        self.primitives = upd.primitives;
-        self.screen_sz_px = upd.screen_sz_px;
-        self.px_per_pt = upd.px_per_pt;
-        self.textures_delta.append(upd.textures_delta);
+impl MessageHandler<EguiUpdate> for EguiPass {
+    fn handle(&mut self, msg: EguiUpdate) {
+        self.primitives = msg.primitives;
+        self.screen_sz_px = msg.screen_sz_px;
+        self.px_per_pt = msg.px_per_pt;
+        self.textures_delta.append(msg.textures_delta);
     }
 }
 
@@ -352,7 +358,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
                     vk::Format::R8G8B8A8_UNORM,
                     vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
                     subres_range,
-                    "egui_tex",
+                    c"egui texture",
                 )?;
 
                 let mut barrier = vk::ImageMemoryBarrier2::default()

@@ -43,7 +43,7 @@ impl AllocatedImage {
         fmt: vk::Format,
         usage: vk::ImageUsageFlags,
         subres_range: vk::ImageSubresourceRange,
-        name: &str,
+        name: &std::ffi::CStr,
     ) -> anyhow::Result<Self> {
         let image_ci = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
@@ -57,10 +57,11 @@ impl AllocatedImage {
             .initial_layout(vk::ImageLayout::UNDEFINED);
 
         let img = unsafe { ctx.dev.create_image(&image_ci, None)? };
+        ctx.debug.set_name(img, name)?;
 
         let requirements = unsafe { ctx.dev.get_image_memory_requirements(img) };
         let mem = ctx.alloc.lock().unwrap().allocate(&AllocationCreateDesc {
-            name,
+            name: &name.to_string_lossy(),
             requirements,
             location: gpu_allocator::MemoryLocation::GpuOnly,
             linear: false,
@@ -76,6 +77,7 @@ impl AllocatedImage {
             .subresource_range(subres_range);
 
         let view = unsafe { ctx.dev.create_image_view(&view_ci, None)? };
+        ctx.debug.set_name(view, name)?;
 
         Ok(Self {
             img,

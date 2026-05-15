@@ -219,6 +219,7 @@ pub struct DebugUtils {
     pub dev: debug_utils::Device,
 }
 
+#[cfg(feature = "vk-debug")]
 impl DebugUtils {
     pub fn begin_label(
         &self,
@@ -257,4 +258,24 @@ impl DebugUtils {
 
         Ok(())
     }
+}
+
+#[cfg(not(feature = "vk-debug"))]
+impl DebugUtils {
+    pub fn begin_label(
+        &self,
+        _cmd: vk::CommandBuffer,
+        _name: &std::ffi::CStr,
+    ) {}
+
+    pub fn end_label(
+        &self,
+        _cmd: vk::CommandBuffer,
+    ) {}
+
+    pub fn set_name(
+        &self,
+        _handle: impl vk::Handle,
+        _name: &std::ffi::CStr,
+    ) -> anyhow::Result<()> {}
 }
