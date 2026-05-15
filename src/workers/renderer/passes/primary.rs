@@ -25,7 +25,9 @@ struct PushConstants {
     camera_bda: u64,
     world_bda: u64,
     depth_idx: u32,
-    color_storage_idx: u32,
+    visbuf_idx: u32,
+    extent_x: u32,
+    extent_y: u32,
 }
 
 impl Destroy for PrimaryPass {
@@ -40,7 +42,7 @@ impl Destroy for PrimaryPass {
 impl PrimaryPass {
     pub fn new(
         ctx: &VulkanCtx,
-        desc_bind_info: DescriptorBindInfo,
+        desc_bind_info: &DescriptorBindInfo,
     ) -> anyhow::Result<Self> {
         // TODO: reloadable shader
         let code = ash::util::read_spv(&mut std::io::Cursor::new(SPV))?;
@@ -120,7 +122,9 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
                     camera_bda: frame.resources.camera_bda,
                     world_bda: 0,
                     depth_idx: frame.resources.depth_idx,
-                    color_storage_idx: frame.resources.color_idx,
+                    visbuf_idx: frame.resources.visbuf_idx,
+                    extent_x: frame.resources.color.extent.width,
+                    extent_y: frame.resources.color.extent.height,
                 }),
             );
 

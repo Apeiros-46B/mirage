@@ -113,10 +113,10 @@ pub struct ResourceView<'a> {
 
     pub depth: &'a AllocatedImage,
     pub depth_idx: u32,
-    pub color: &'a AllocatedImage,
-    pub color_idx: u32,
     pub visbuf: &'a AllocatedImage,
     pub visbuf_idx: u32,
+    pub color: &'a AllocatedImage,
+    pub color_idx: u32,
 }
 
 impl<'a, 'b> ResourceView<'a> {

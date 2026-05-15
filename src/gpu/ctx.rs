@@ -75,6 +75,7 @@ fn create_dev(
     }
 
     let features = vk::PhysicalDeviceFeatures::default()
+        .shader_int16(true)
         .shader_int64(true);
 
     let mut features_11 = vk::PhysicalDeviceVulkan11Features::default()

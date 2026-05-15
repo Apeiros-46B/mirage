@@ -1,23 +1,30 @@
-use crate::{gpu::{ctx::{Destroy, VulkanCtx}, sync::ImageBarrierExt, task::Task}, sync::worker::MessageHandler, workers::msgs::EguiUpdate};
-
-use super::{FrameCtx, resources::Resources};
 use ash::vk;
+
+use crate::{
+    gpu::{ctx::{Destroy, VulkanCtx}, sync::ImageBarrierExt, task::Task},
+    sync::worker::MessageHandler,
+    workers::msgs::EguiUpdate,
+};
+use super::{FrameCtx, resources::Resources};
 use blit::BlitPass;
 use depth::DepthPrepass;
 use egui::EguiPass;
 use frame::ClearPass;
 use primary::PrimaryPass;
+use vis::VisPass;
 
 pub mod blit;
 pub mod depth;
 pub mod egui;
 pub mod frame;
 pub mod primary;
+pub mod vis; // debug visualization of visbuf
 
 pub struct Passes {
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
     primary_pass: PrimaryPass,
+    vis_pass: VisPass,
     blit_pass: BlitPass,
     egui_pass: EguiPass,
 }
@@ -27,6 +34,7 @@ impl Destroy for Passes {
         unsafe {
             self.egui_pass.destroy(ctx);
             self.blit_pass.destroy(ctx);
+            self.vis_pass.destroy(ctx);
             self.primary_pass.destroy(ctx);
             self.depth_prepass.destroy(ctx);
             self.clear_pass.destroy(ctx);
@@ -40,10 +48,12 @@ impl Passes {
         resources: &Resources,
         swap_fmt: vk::Format,
     ) -> anyhow::Result<Self> {
+        let bind_info = resources.desc.get_bind_info();
         Ok(Self {
             clear_pass: ClearPass,
             depth_prepass: DepthPrepass::new(&ctx)?,
-            primary_pass: PrimaryPass::new(&ctx, resources.desc.get_bind_info())?,
+            primary_pass: PrimaryPass::new(&ctx, &bind_info)?,
+            vis_pass: VisPass::new(&ctx, &bind_info)?,
             blit_pass: BlitPass,
             egui_pass: EguiPass::new(&ctx, swap_fmt)?,
         })
@@ -89,7 +99,7 @@ impl Task<FrameCtx<'_>> for Passes {
             self.depth_prepass.execute(&ctx, frame)?;
         }
 
-        let mut color_barrier = frame.resources.color_barrier()
+        let mut visbuf_barrier = frame.resources.visbuf_barrier()
             .begin(
                 vk::ImageLayout::GENERAL,
                 vk::PipelineStageFlags2::COMPUTE_SHADER,
@@ -101,8 +111,24 @@ impl Task<FrameCtx<'_>> for Passes {
             vk::AccessFlags2::SHADER_SAMPLED_READ,
         );
         unsafe {
-            ctx.barrier(cmd, [depth_barrier, color_barrier]);
+            ctx.barrier(cmd, [visbuf_barrier, depth_barrier]);
             self.primary_pass.execute(&ctx, frame)?;
+        }
+
+        let mut color_barrier = frame.resources.color_barrier()
+            .begin(
+                vk::ImageLayout::GENERAL,
+                vk::PipelineStageFlags2::COMPUTE_SHADER,
+                vk::AccessFlags2::SHADER_WRITE,
+            );
+        visbuf_barrier.transition(
+            vk::ImageLayout::GENERAL,
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_READ,
+        );
+        unsafe {
+            ctx.barrier(cmd, [visbuf_barrier, color_barrier]);
+            self.vis_pass.execute(&ctx, frame)?;
         }
 
         color_barrier.transition(
