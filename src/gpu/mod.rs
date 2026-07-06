@@ -1,4 +1,4 @@
-pub mod arena;
+pub mod alloc;
 pub mod ctx;
 pub mod desc;
 pub mod img;

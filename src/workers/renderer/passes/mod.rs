@@ -1,3 +1,4 @@
+use anyhow::Result;
 use ash::vk;
 
 use crate::{
@@ -47,7 +48,7 @@ impl Passes {
         ctx: &VulkanCtx,
         resources: &Resources,
         swap_fmt: vk::Format,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         let bind_info = resources.desc.get_bind_info();
         Ok(Self {
             clear_pass: ClearPass,
@@ -71,7 +72,7 @@ impl Task<FrameCtx<'_>> for Passes {
         &mut self,
         ctx: &VulkanCtx,
         frame: &mut FrameCtx<'_>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let cmd = frame.in_flight.cmd;
 
         let mut swap_barrier = frame.in_flight.base_barrier

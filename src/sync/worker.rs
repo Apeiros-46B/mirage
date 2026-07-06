@@ -1,6 +1,5 @@
 use std::{
     any::type_name,
-    cell::Cell,
     sync::{Arc, Condvar, Mutex, atomic::{AtomicU8, Ordering}},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -74,6 +73,26 @@ impl<I> WorkerControl<I> {
 }
 // }}}
 
+/// tick timing info
+pub struct TickTiming {
+    /// increasing tick index, reset to 0 on resume
+    pub n: usize,
+
+    /// wall time since worker last resumed
+    pub since_wake: Duration,
+
+    /// under `run_tickrate`, this is the constant tick step
+    /// under `run_free`, this is the delta in wall clock time
+    pub dt: Duration,
+
+    /// under `run_tickrate`, this is how far the tick lagged behind real time
+    /// under `run_free`, this is always zero
+    pub lag: Duration,
+}
+
+/// max ticks of catchup before the sim starts dropping missed ticks
+const MAX_CATCHUP_TICKS: u32 = 5;
+
 pub trait Worker: Sized + Default {
     type Init: Send + 'static;
 
@@ -83,17 +102,12 @@ pub trait Worker: Sized + Default {
 
     type Channels: WorkerRx<Self::State>;
 
-    fn on_resume(&self, init: Self::Init) -> anyhow::Result<Self::State>;
+    fn on_resume(&self, init: Self::Init) -> Result<Self::State>;
 
     // do something with the state, default is drop
     fn on_suspend(_this: Self::State) {}
 
-    fn on_tick(
-        this: &mut Self::State,
-        since_wake: Duration,
-        since_tick: Duration,
-        tick: usize,
-    ) -> anyhow::Result<()>;
+    fn on_tick(this: &mut Self::State, ctx: &TickTiming) -> Result<()>;
 
     fn run(self, ctrl: Arc<WorkerControl<Self::Init>>, rx: Self::Channels) {
         self.run_free(ctrl, rx);
@@ -101,6 +115,82 @@ pub trait Worker: Sized + Default {
 }
 
 // {{{ sealed helper trait for implementing Workers
+// {{{ shared loop skeleton used by run_free/run_tickrate
+/// per-iteration timing state owned by `main_loop`
+struct LoopTimers {
+    wake: Instant,
+    prev: Instant,
+    tick: usize,
+    accum: Duration,
+}
+
+// note that if you implement your own run() without using main_loop,
+// neither the primary or auxiliary event queues will be automatically
+// pumped! you must use methods on WorkerChannels to do it yourself
+fn main_loop<W: Worker>(
+    worker: W,
+    ctrl: Arc<WorkerControl<W::Init>>,
+    mut rx: W::Channels,
+    mut pre_tick: impl FnMut(&mut W::Channels, &mut W::State, &mut LoopTimers),
+    mut body: impl FnMut(&mut W::State, &mut W::Channels, &mut LoopTimers),
+) {
+    let mut this = None;
+    let mut timers = LoopTimers {
+        wake: Instant::now(),
+        prev: Instant::now(),
+        tick: 0,
+        accum: Duration::ZERO,
+    };
+
+    loop {
+        // {{{ lifecycle
+        match ctrl.status.load(Ordering::Acquire) {
+            status @ (WorkerStatus::DEAD | WorkerStatus::SUSPENDED) => {
+                if let Some(o) = this.take() {
+                    W::on_suspend(o);
+                    ctrl.notify_suspend();
+                }
+                if status == WorkerStatus::DEAD {
+                    return;
+                }
+            }
+            WorkerStatus::ALIVE if this.is_none() => {
+                let mut payload = ctrl.init_payload.lock().unwrap();
+                if let Some(init) = payload.take() {
+                    match worker.on_resume(init) {
+                        Ok(o) => {
+                            this = Some(o);
+                            let now = Instant::now();
+                            timers.wake = now;
+                            timers.prev = now;
+                            timers.tick = 0;
+                            // drop pending catch-up: a fresh resume must
+                            // not fast-forward through suspend time
+                            timers.accum = Duration::ZERO;
+                        }
+                        Err(e) => eprintln!(
+                            "failed to wake {}: {e}",
+                            type_name::<W>(),
+                        ),
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let Some(o) = this.as_mut() else {
+            thread::park();
+            continue;
+        };
+        // }}}
+
+        pre_tick(&mut rx, o, &mut timers);
+        rx.drain_aux(o);
+        body(o, &mut rx, &mut timers);
+    }
+}
+// }}}
+
 mod seal {
     pub trait Sealed {}
     impl<T: super::Worker> Sealed for T {}
@@ -114,7 +204,7 @@ pub trait WorkerExt: Worker + seal::Sealed {
         rx: Self::Channels,
     );
 
-    /// poll with a fixed tickrate and perform subtick event handling.
+    /// run a fixed-timestep accumulator loop and perform subtick event handling.
     /// only works with a blocking primary channel
     fn run_tickrate(
         self,
@@ -125,14 +215,6 @@ pub trait WorkerExt: Worker + seal::Sealed {
         <Self::Channels as WorkerRx<Self::State>>::PrimaryRx:
             RxBlocking<<Self::Channels as WorkerRx<Self::State>>::Msg>;
 
-    fn main_loop(
-        self,
-        ctrl: Arc<WorkerControl<Self::Init>>,
-        rx: Self::Channels,
-        pre_tick: impl FnMut(&mut Self::Channels, &mut Self::State),
-        post_tick: impl FnMut(&mut Self::State),
-    );
-
     fn spawn() -> WorkerHandle<Self>;
 }
 
@@ -142,9 +224,23 @@ impl<T: Worker> WorkerExt for T {
         ctrl: Arc<WorkerControl<Self::Init>>,
         rx: Self::Channels,
     ) {
-        self.main_loop(ctrl, rx,
-            |rx, this| rx.drain_primary(this),
-            |_| {},
+        main_loop(
+            self, ctrl, rx,
+            |rx, o, _| rx.drain_primary(o),
+            |o, _rx, timers| {
+                let now = Instant::now();
+                let ctx = TickTiming {
+                    since_wake: now - timers.wake,
+                    dt: now - timers.prev,
+                    n: timers.tick,
+                    lag: Duration::ZERO,
+                };
+                timers.prev = now;
+                if let Err(e) = Self::on_tick(o, &ctx) {
+                    eprintln!("{} tick {} error: {e}", type_name::<Self>(), timers.tick);
+                }
+                timers.tick += 1;
+            },
         );
     }
 
@@ -155,95 +251,49 @@ impl<T: Worker> WorkerExt for T {
         tickrate_hz: f64,
     ) where
         <Self::Channels as WorkerRx<Self::State>>::PrimaryRx:
-            RxBlocking<<Self::Channels as WorkerRx<Self::State>>::Msg>
+            RxBlocking<<Self::Channels as WorkerRx<Self::State>>::Msg>,
     {
         let tick_dur = Duration::from_secs_f64(1.0 / tickrate_hz);
-        let next = Cell::new(Instant::now() + tick_dur);
+        let max_lag = tick_dur * MAX_CATCHUP_TICKS;
 
-        // register this thread so the producer can unpark it
+        // register this thread so producers can unpark it on push
         rx.primary().use_current_thread();
 
-        self.main_loop(ctrl, rx,
-            |rx, this| {
-                rx.primary().drain_deadline(next.get(), |msg| this.handle(msg));
+        main_loop(
+            self, ctrl, rx,
+            move |rx, o, timers| {
+                // pace until the next tick boundary. drain_deadline parks the
+                // thread (producer unparks on push) so input is handled immediately
+                // when idle without spinning
+                rx.primary().drain_deadline(
+                    // `accum < tick_dur` (body inner loop), no underflow possible
+                    Instant::now() + tick_dur - timers.accum,
+                    |msg| o.handle(msg)
+                );
             },
-            |_| {
-                // advance the deadline by integer multiples of tick time.
-                // if tick() processing lags and misses ticks, skip them.
-                // this also fast-forwards from the stale timestamp when
-                // we are suspended and then later resumed in the future
+            move |o, _rx, timers| {
                 let now = Instant::now();
-                while next.get() <= now {
-                    next.update(|val| val + tick_dur);
+                timers.accum += now - timers.prev;
+                timers.prev = now;
+                if timers.accum > max_lag {
+                    timers.accum = max_lag;
+                }
+
+                while timers.accum >= tick_dur {
+                    let ctx = TickTiming {
+                        since_wake: now - timers.wake,
+                        dt: tick_dur,
+                        n: timers.tick,
+                        lag: timers.accum,
+                    };
+                    if let Err(e) = Self::on_tick(o, &ctx) {
+                        eprintln!("{} tick {} error: {e}", type_name::<Self>(), timers.tick);
+                    }
+                    timers.tick += 1;
+                    timers.accum -= tick_dur;
                 }
             },
         );
-    }
-
-    // pre_tick should drain the primary queue, but not the auxiliary queues.
-    // note that if you implement your own run() without using main_loop,
-    // neither the primary or auxiliary event queues will be automatically
-    // pumped! you must use methods on WorkerChannels to do it yourself
-    fn main_loop(
-        self,
-        ctrl: Arc<WorkerControl<Self::Init>>,
-        mut rx: Self::Channels,
-        mut pre_tick: impl FnMut(&mut Self::Channels, &mut Self::State),
-        mut post_tick: impl FnMut(&mut Self::State),
-    ) {
-        let mut this = None;
-        let mut start = Instant::now();
-        let mut prev = start;
-        let mut tick = 0usize;
-
-        loop {
-            match ctrl.status.load(Ordering::Acquire) {
-                status @ (WorkerStatus::DEAD | WorkerStatus::SUSPENDED) => {
-                    if let Some(o) = this.take() {
-                        Self::on_suspend(o);
-                        ctrl.notify_suspend();
-                    }
-                    if status == WorkerStatus::DEAD {
-                        return;
-                    }
-                }
-                WorkerStatus::ALIVE if this.is_none() => {
-                    let mut payload = ctrl.init_payload.lock().unwrap();
-                    if let Some(init) = payload.take() {
-                        match self.on_resume(init) {
-                            Ok(o) => {
-                                this = Some(o);
-                                start = Instant::now();
-                                prev = start;
-                                tick = 0;
-                            }
-                            Err(e) => eprintln!(
-                                "failed to wake {}: {e}",
-                                type_name::<Self>(),
-                            ),
-                        }
-                    }
-                }
-                _ => {}
-            }
-
-            let Some(o) = this.as_mut() else {
-                thread::park();
-                continue;
-            };
-
-            pre_tick(&mut rx, o);
-            rx.drain_aux(o);
-
-            let now = Instant::now();
-            if let Err(e) = Self::on_tick(o, now - start, now - prev, tick) {
-                eprintln!("{} tick {tick} error: {e}", type_name::<Self>());
-            }
-            prev = now;
-            tick += 1;
-
-            post_tick(o);
-        }
     }
 
     fn spawn() -> WorkerHandle<Self> {
@@ -286,7 +336,7 @@ impl<W: Worker> WorkerHandle<W> {
         }
     }
 
-    /// this may deadlock if called before the worker has processed a preceding resume().
+    /// this may deadlock if called before the worker has resumed previously.
     /// suspend() should only be called on a worker that is known to be alive
     pub fn suspend(&mut self) {
         if self.ctrl.status.load(Ordering::Acquire) == WorkerStatus::SUSPENDED {
@@ -566,5 +616,6 @@ macro_rules! channel_routing_for {
     (@construct          $cap:expr) => { rtrb::RingBuffer::new($cap) };
 }
 
+use anyhow::Result;
 pub(crate) use channel_routing_for;
 // }}}

@@ -26,14 +26,19 @@ pub enum AppMsg {
     SetCursorCapture(bool),
 }
 
+/// tickrate of the game loop
+pub const GAME_TICKRATE_HZ: f64 = 120.0;
+
 #[derive(Debug)]
 pub struct GameTelemetry {
-    pub tick_time: f32,
+    /// how long a tick's computation actually took
+    pub tick_ms: f32,
+    pub lag_ms: f32,
 }
 
 #[derive(Debug)]
 pub struct RendererTelemetry {
-    pub frame_time: f32,
+    pub frame_ms: f32,
 }
 
 channel_routing_for!(App {

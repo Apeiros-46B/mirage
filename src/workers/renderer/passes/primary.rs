@@ -1,4 +1,4 @@
-use anyhow::bail;
+use anyhow::{Result, bail};
 use ash::vk;
 use bytemuck::{Pod, Zeroable};
 
@@ -43,7 +43,7 @@ impl PrimaryPass {
     pub fn new(
         ctx: &VulkanCtx,
         desc_bind_info: &DescriptorBindInfo,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         // TODO: reloadable shader
         let code = ash::util::read_spv(&mut std::io::Cursor::new(SPV))?;
         let shader_info = vk::ShaderModuleCreateInfo::default().code(&code);
@@ -100,7 +100,7 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
         &mut self,
         ctx: &VulkanCtx,
         frame: &mut FrameCtx,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let cmd = frame.in_flight.cmd;
 
         unsafe {

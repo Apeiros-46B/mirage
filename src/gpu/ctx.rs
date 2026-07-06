@@ -1,8 +1,13 @@
 // TODO: replace _ci, _ai naming convention everywhere with _info
 use std::{ffi::c_char, mem::ManuallyDrop, sync::{Arc, Mutex}};
 
+use anyhow::Result;
 use ash::{ext::debug_utils, vk};
-use gpu_allocator::{AllocationSizes, AllocatorDebugSettings, vulkan::{Allocator, AllocatorCreateDesc}};
+use gpu_allocator::{
+    AllocationSizes,
+    AllocatorDebugSettings,
+    vulkan::{Allocator, AllocatorCreateDesc},
+};
 use winit::{raw_window_handle::{RawDisplayHandle, RawWindowHandle}, window::Window};
 
 use crate::gpu::{GPU, surf::Surface};
@@ -53,9 +58,9 @@ pub trait Recreate: Destroy {
     type Item;
 
     /// recreates the Vulkan resource
-    unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, f: F) -> anyhow::Result<()>
+    unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, f: F) -> Result<()>
     where
-        F: FnMut() -> anyhow::Result<Self::Item>;
+        F: FnMut() -> Result<Self::Item>;
 }
 
 // TODO: impl Recreate for Vec<T: Recreate>
@@ -64,7 +69,7 @@ pub trait Recreate: Destroy {
 fn create_dev(
     inst: &ash::Instance,
     sel: &GPU,
-) -> anyhow::Result<ash::Device> {
+) -> Result<ash::Device> {
     let qfam_idxs = sel.uniq_idxs();
     let prios = [1.0f32];
     let mut qu_cis = Vec::with_capacity(qfam_idxs.len());
@@ -132,7 +137,7 @@ impl VulkanCtx {
         raw_disp: RawDisplayHandle,
         raw_win: RawWindowHandle,
         win: Arc<Window>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         let entry = unsafe { ash::Entry::load()? };
 
         let req_exts = ash_window::enumerate_required_extensions(raw_disp)
@@ -248,7 +253,7 @@ impl DebugUtils {
         &self,
         handle: impl vk::Handle,
         name: &std::ffi::CStr,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         unsafe {
             self.dev.set_debug_utils_object_name(
                 &vk::DebugUtilsObjectNameInfoEXT::default()
@@ -278,5 +283,5 @@ impl DebugUtils {
         &self,
         _handle: impl vk::Handle,
         _name: &std::ffi::CStr,
-    ) -> anyhow::Result<()> {}
+    ) -> Result<()> {}
 }

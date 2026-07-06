@@ -9,7 +9,7 @@ use gpu_allocator::{
 
 use crate::gpu::{MappedPtr, ctx::VulkanCtx};
 
-pub struct GPUArenaAllocation<T: ?Sized = [u8]> {
+pub struct GPUAllocation<T = u8> {
     pub buf: vk::Buffer,
     /// offset pre-applied
     pub bda: u64,
@@ -18,7 +18,7 @@ pub struct GPUArenaAllocation<T: ?Sized = [u8]> {
     _phantom: PhantomData<T>,
 }
 
-impl<T> GPUArenaAllocation<T> {
+impl<T> GPUAllocation<T> {
     pub unsafe fn write(&mut self, val: &T) {
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -28,28 +28,28 @@ impl<T> GPUArenaAllocation<T> {
             );
         }
     }
-}
 
-impl GPUArenaAllocation<[u8]> {
-    pub unsafe fn write_bytes(&mut self, bytes: &[u8]) {
+    pub unsafe fn write_slice(&mut self, val: &[T]) {
         unsafe {
             std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                self.ptr.0,
-                bytes.len(),
+                val.as_ptr(),
+                self.ptr.0 as *mut T,
+                val.len(),
             );
         }
     }
+}
 
-    pub unsafe fn write_pod<U: Pod>(&mut self, val: &U) {
+impl GPUAllocation<u8> {
+    pub unsafe fn write_data<T: Pod>(&mut self, val: &T) {
         let bytes = bytes_of(val);
         unsafe {
-            self.write_bytes(bytes);
+            self.write_slice(bytes);
         }
     }
 
-    pub fn cast<T>(self) -> GPUArenaAllocation<T> {
-        GPUArenaAllocation {
+    pub fn cast<T>(self) -> GPUAllocation<T> {
+        GPUAllocation {
             buf: self.buf,
             bda: self.bda,
             ofs: self.ofs,
@@ -127,7 +127,7 @@ impl GPUArena {
         &mut self,
         sz: u64,
         align: u64,
-    ) -> GPUArenaAllocation {
+    ) -> GPUAllocation {
         let align_diff = self.cur_ofs % align;
         if align_diff != 0 {
             self.cur_ofs += align - align_diff;
@@ -143,7 +143,7 @@ impl GPUArena {
             self.cur_ofs
         );
 
-        GPUArenaAllocation {
+        GPUAllocation {
             buf: self.buf,
             bda: self.bda + ofs,
             ofs,
@@ -152,7 +152,7 @@ impl GPUArena {
         }
     }
 
-    pub fn alloc_of<T>(&mut self) -> GPUArenaAllocation<T> {
+    pub fn alloc_of<T>(&mut self) -> GPUAllocation<T> {
         self.alloc(
             std::mem::size_of::<T>() as u64,
             std::mem::align_of::<T>() as u64,

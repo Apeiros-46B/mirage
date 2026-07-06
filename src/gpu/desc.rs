@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ash::vk;
 
-use crate::gpu::{ctx::{Destroy, VulkanCtx}, img::AllocatedImage};
+use crate::gpu::{ctx::{Destroy, VulkanCtx}, img::GPUImage};
 
 pub struct DescriptorBindInfo {
     pub set: vk::DescriptorSet,
@@ -137,7 +137,7 @@ impl DescriptorAllocator {
         binding: u32,
 
         layout: vk::ImageLayout,
-        imgs: &[AllocatedImage; N],
+        imgs: &[GPUImage; N],
     ) {
         let info: [vk::DescriptorImageInfo; N] = std::array::from_fn(|i| {
             let img = &imgs[i];
@@ -169,7 +169,7 @@ impl DescriptorAllocator {
         binding: u32,
 
         layout: vk::ImageLayout,
-        imgs: &[AllocatedImage; N],
+        imgs: &[GPUImage; N],
     ) -> [u32; N] {
         let idx_start = *cursor;
         *cursor += N as u32;
@@ -179,7 +179,7 @@ impl DescriptorAllocator {
 
     pub fn alloc_sampled_imgs<const N: usize>(
         &mut self,
-        imgs: &[AllocatedImage; N],
+        imgs: &[GPUImage; N],
     ) -> [u32; N] {
         Self::alloc_imgs(
             &self.ctx,
@@ -194,7 +194,7 @@ impl DescriptorAllocator {
 
     pub fn alloc_storage_imgs<const N: usize>(
         &mut self,
-        imgs: &[AllocatedImage; N],
+        imgs: &[GPUImage; N],
     ) -> [u32; N] {
         Self::alloc_imgs(
             &self.ctx,
@@ -210,7 +210,7 @@ impl DescriptorAllocator {
     pub fn update_sampled_imgs<const N: usize>(
         &mut self,
         idx_start: u32,
-        imgs: &[AllocatedImage; N],
+        imgs: &[GPUImage; N],
     ) {
         Self::update_imgs(
             &self.ctx,
@@ -226,7 +226,7 @@ impl DescriptorAllocator {
     pub fn update_storage_imgs<const N: usize>(
         &mut self,
         idx_start: u32,
-        imgs: &[AllocatedImage; N],
+        imgs: &[GPUImage; N],
     ) {
         Self::update_imgs(
             &self.ctx,

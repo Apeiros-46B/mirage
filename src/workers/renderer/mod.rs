@@ -23,13 +23,14 @@ mod frames;
 mod passes;
 mod resources;
 
+use anyhow::Result;
 use ash::vk;
 use winit::dpi::PhysicalSize;
 use std::{sync::Arc, time::Duration};
 
 use crate::{
     gpu::{ctx::{Destroy, VulkanCtx}, sync::ImageBarrierExt, task::Task},
-    sync::{chan::SafeSend, worker::{MessageHandler, Worker}},
+    sync::{chan::SafeSend, worker::{MessageHandler, TickTiming, Worker}},
     workers::msgs::{
         CameraState,
         EguiUpdate,
@@ -88,7 +89,7 @@ impl Worker for Renderer {
     type State = RendererState;
     type Channels = RendererRxBundle;
 
-    fn on_resume(&self, init: Self::Init) -> anyhow::Result<Self::State> {
+    fn on_resume(&self, init: Self::Init) -> Result<Self::State> {
         let ctx = init.ctx;
 
         let manager = FrameManager::new(ctx.clone(), init.sz)?;
@@ -107,13 +108,11 @@ impl Worker for Renderer {
 
     fn on_tick(
         this: &mut Self::State,
-        since_wake: Duration,
-        since_tick: Duration,
-        tick: usize,
-    ) -> anyhow::Result<()> {
-        let dt = since_tick.as_secs_f32();
+        tick: &TickTiming,
+    ) -> Result<()> {
+        let dt = tick.dt.as_secs_f32();
 
-        this.app_tx.telemetry.send(RendererTelemetry { frame_time: dt });
+        this.app_tx.telemetry.send(RendererTelemetry { frame_ms: dt });
 
         let Some(mut target) = this.manager.begin_frame(&this.ctx)? else {
             if this.manager.is_minimized() {
@@ -133,8 +132,8 @@ impl Worker for Renderer {
         let mut frame = FrameCtx {
             resources: this.resources.view(&mut target),
             in_flight: target,
-            frame_idx: tick,
-            time: since_wake.as_secs_f64(),
+            frame_idx: tick.n,
+            time: tick.since_wake.as_secs_f64(),
             dt,
         };
         unsafe {

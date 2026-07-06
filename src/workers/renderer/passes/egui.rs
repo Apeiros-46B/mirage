@@ -1,5 +1,6 @@
 use std::{collections::HashMap, mem};
 
+use anyhow::Result;
 use ash::vk;
 use egui::{ClippedPrimitive, TextureId, TexturesDelta, epaint::Vertex};
 use winit::dpi::PhysicalSize;
@@ -7,7 +8,7 @@ use winit::dpi::PhysicalSize;
 use crate::{
     gpu::{
         ctx::{Destroy, VulkanCtx},
-        img::AllocatedImage,
+        img::GPUImage,
         sync::ImageBarrierExt,
         task::Task,
     },
@@ -35,8 +36,8 @@ pub struct EguiPass {
     sampler: vk::Sampler,
 
     // images are guaranteed to never exist in both of these collections at once
-    textures: HashMap<TextureId, (AllocatedImage, vk::DescriptorSet)>,
-    unused_textures: PerFrame<Vec<AllocatedImage>>,
+    textures: HashMap<TextureId, (GPUImage, vk::DescriptorSet)>,
+    unused_textures: PerFrame<Vec<GPUImage>>,
     unused_desc_sets: PerFrame<Vec<vk::DescriptorSet>>,
 }
 
@@ -61,7 +62,7 @@ impl Destroy for EguiPass {
 impl EguiPass {
     // TODO: handle format changing (e.g. user moving app between monitors)
     // probably needs new Task method and refactor of presenter
-    pub fn new(ctx: &VulkanCtx, fmt: vk::Format) -> anyhow::Result<Self> {
+    pub fn new(ctx: &VulkanCtx, fmt: vk::Format) -> Result<Self> {
         let code = ash::util::read_spv(&mut std::io::Cursor::new(SPV))?;
         let shader_info = vk::ShaderModuleCreateInfo::default().code(&code);
         let module = unsafe { ctx.dev.create_shader_module(&shader_info, None)? };
@@ -246,7 +247,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
         &mut self,
         ctx: &VulkanCtx,
         frame: &mut FrameCtx,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let cmd = frame.in_flight.cmd;
         let fif = frame.in_flight.idx;
 
@@ -352,7 +353,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
                 // }}}
             } else {
                 // {{{ new image
-                let img = AllocatedImage::new(
+                let img = GPUImage::new(
                     ctx,
                     extent,
                     vk::Format::R8G8B8A8_UNORM,

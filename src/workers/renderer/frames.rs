@@ -1,10 +1,11 @@
 use std::{ops::{Deref, Index, IndexMut}, slice::{Iter, IterMut}, sync::Arc};
 
+use anyhow::Result;
 use ash::{khr, vk};
 use winit::dpi::PhysicalSize;
 
 use crate::{
-    gpu::{arena::GPUArena, ctx::{Destroy, Recreate, VulkanCtx}},
+    gpu::{alloc::GPUArena, ctx::{Destroy, Recreate, VulkanCtx}},
     util::array_try_from_fn,
 };
 
@@ -99,7 +100,7 @@ impl Destroy for Swapchain {
 }
 
 impl Swapchain {
-    pub fn new(ctx: &VulkanCtx, size: (u32, u32)) -> anyhow::Result<Self> {
+    pub fn new(ctx: &VulkanCtx, size: (u32, u32)) -> Result<Self> {
         let loader = khr::swapchain::Device::new(&ctx.inst, &ctx.dev);
 
         let mut s = Self {
@@ -120,7 +121,7 @@ impl Swapchain {
         &mut self,
         ctx: &VulkanCtx,
         sz: (u32, u32),
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool> {
         if sz.0 == 0 || sz.1 == 0 { return Ok(false); }
 
         unsafe { ctx.dev.device_wait_idle()?; }
@@ -179,7 +180,7 @@ impl Swapchain {
     pub fn acquire(
         &mut self,
         to_signal: vk::Semaphore,
-    ) -> anyhow::Result<Option<RenderImage>> {
+    ) -> Result<Option<RenderImage>> {
         assert!(self.img_idx.is_none(), "acquire called twice without present");
 
         let result = unsafe {
@@ -207,7 +208,7 @@ impl Swapchain {
     }
 
     // returns false if swapchain needs recreation
-    pub fn present(&mut self, queue: vk::Queue) -> anyhow::Result<bool> {
+    pub fn present(&mut self, queue: vk::Queue) -> Result<bool> {
         let idx = self.img_idx.take().expect("present called without acquire");
 
         let present_info = vk::PresentInfoKHR::default()
@@ -238,7 +239,7 @@ impl Swapchain {
         self.imgs[idx as usize].render_sem
     }
 
-    fn choose_fmt(&self, ctx: &VulkanCtx) -> anyhow::Result<vk::SurfaceFormatKHR> {
+    fn choose_fmt(&self, ctx: &VulkanCtx) -> Result<vk::SurfaceFormatKHR> {
         let fmts = ctx.surf.get_fmts(&ctx.gpu)?;
         Ok(fmts.iter()
             .find(|f| {
@@ -250,7 +251,7 @@ impl Swapchain {
         )
     }
 
-    fn choose_mode(&self, ctx: &VulkanCtx) -> anyhow::Result<vk::PresentModeKHR> {
+    fn choose_mode(&self, ctx: &VulkanCtx) -> Result<vk::PresentModeKHR> {
         let modes = ctx.surf.get_modes(&ctx.gpu)?;
         Ok(modes.into_iter()
             .find(|&m| m == vk::PresentModeKHR::FIFO)
@@ -275,12 +276,12 @@ impl Swapchain {
         loader: &khr::swapchain::Device,
         handle: vk::SwapchainKHR,
         fmt: vk::Format,
-    ) -> anyhow::Result<Vec<SwapchainImage>> {
+    ) -> Result<Vec<SwapchainImage>> {
         let raw = unsafe { loader.get_swapchain_images(handle)? };
         let mut imgs = Vec::with_capacity(raw.len());
 
         // try block would be nice here
-        let result = (|| -> anyhow::Result<()> {
+        let result = (|| -> Result<()> {
             for img in raw {
                 ctx.debug.set_name(img, c"swap img")?;
 
@@ -344,7 +345,7 @@ impl Destroy for FrameManager {
 }
 
 impl FrameManager {
-    pub fn new(ctx: Arc<VulkanCtx>, sz: PhysicalSize<u32>) -> anyhow::Result<Self> {
+    pub fn new(ctx: Arc<VulkanCtx>, sz: PhysicalSize<u32>) -> Result<Self> {
         let swapchain = Swapchain::new(&ctx, sz.into())?;
 
         let cmd_pool_info = vk::CommandPoolCreateInfo::default()
@@ -365,7 +366,7 @@ impl FrameManager {
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
         let sem_info = vk::SemaphoreCreateInfo::default();
 
-        let frames = array_try_from_fn(|i| -> anyhow::Result<FrameData> {
+        let frames = array_try_from_fn(|i| -> Result<FrameData> {
             Ok(FrameData {
                 cmd: cmd_bufs[i],
                 img_available_sem: unsafe {
@@ -391,7 +392,7 @@ impl FrameManager {
     pub fn begin_frame(
         &mut self,
         ctx: &VulkanCtx,
-    ) -> anyhow::Result<Option<RenderTarget<'_>>> {
+    ) -> Result<Option<RenderTarget<'_>>> {
         let mut did_resize = false;
         let frame = &mut self.frames[self.frame_idx];
 
@@ -442,7 +443,7 @@ impl FrameManager {
         }))
     }
 
-    pub fn submit_frame(&mut self, ctx: &VulkanCtx) -> anyhow::Result<()> {
+    pub fn submit_frame(&mut self, ctx: &VulkanCtx) -> Result<()> {
         let frame = &self.frames[self.frame_idx];
 
         unsafe { ctx.dev.end_command_buffer(frame.cmd)? };
@@ -566,9 +567,9 @@ impl<T: Destroy> Destroy for PerFrame<T> {
 impl<T: Destroy> Recreate for PerFrame<T> {
     type Item = T;
 
-    unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, mut f: F) -> anyhow::Result<()>
+    unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, mut f: F) -> Result<()>
     where
-        F: FnMut() -> anyhow::Result<Self::Item>,
+        F: FnMut() -> Result<Self::Item>,
     {
         for item in self.iter_mut() {
             unsafe { item.destroy(ctx); }

@@ -1,3 +1,4 @@
+use anyhow::Result;
 use ash::vk;
 
 use crate::{
@@ -27,7 +28,7 @@ impl Destroy for DepthPrepass {
 
 impl DepthPrepass {
     // TODO: review
-    pub fn new(ctx: &VulkanCtx) -> anyhow::Result<Self> {
+    pub fn new(ctx: &VulkanCtx) -> Result<Self> {
         let code = ash::util::read_spv(&mut std::io::Cursor::new(SPV))?;
         let shader_info = vk::ShaderModuleCreateInfo::default().code(&code);
         let module = unsafe { ctx.dev.create_shader_module(&shader_info, None)? };
@@ -124,7 +125,7 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
         &mut self,
         ctx: &VulkanCtx,
         frame: &mut FrameCtx,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let cmd = frame.in_flight.cmd;
 
         // render depth only, cleared to 1.0

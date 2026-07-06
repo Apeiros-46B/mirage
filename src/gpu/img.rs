@@ -1,9 +1,10 @@
+use anyhow::Result;
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme};
 
 use crate::gpu::ctx::{Destroy, Recreate, VulkanCtx};
 
-pub struct AllocatedImage {
+pub struct GPUImage {
     pub img: vk::Image,
     pub view: vk::ImageView,
     pub mem: Option<Allocation>,
@@ -11,7 +12,7 @@ pub struct AllocatedImage {
     pub extent: vk::Extent3D,
 }
 
-impl Destroy for AllocatedImage {
+impl Destroy for GPUImage {
     unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
         unsafe {
             ctx.dev.destroy_image_view(self.view, None);
@@ -23,12 +24,12 @@ impl Destroy for AllocatedImage {
     }
 }
 
-impl Recreate for AllocatedImage {
+impl Recreate for GPUImage {
     type Item = Self;
 
-    unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, mut f: F) -> anyhow::Result<()>
+    unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, mut f: F) -> Result<()>
     where
-        F: FnMut() -> anyhow::Result<Self::Item>,
+        F: FnMut() -> Result<Self::Item>,
     {
         unsafe { self.destroy(ctx); }
         *self = f()?;
@@ -36,7 +37,7 @@ impl Recreate for AllocatedImage {
     }
 }
 
-impl AllocatedImage {
+impl GPUImage {
     pub fn new(
         ctx: &VulkanCtx,
         extent: vk::Extent3D,
@@ -44,7 +45,7 @@ impl AllocatedImage {
         usage: vk::ImageUsageFlags,
         subres_range: vk::ImageSubresourceRange,
         name: &std::ffi::CStr,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         let image_ci = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .extent(extent)

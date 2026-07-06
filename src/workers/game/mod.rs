@@ -1,15 +1,16 @@
 pub mod camera;
 pub mod input;
 
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, time::Instant};
 
+use anyhow::Result;
 use triple_buffer::Input;
 use winit::dpi::PhysicalSize;
 
 use crate::{
     sync::{
         chan::SafeSend,
-        worker::{MessageHandler, Worker, WorkerControl, WorkerExt},
+        worker::{MessageHandler, TickTiming, Worker, WorkerControl, WorkerExt},
     },
     workers::msgs::{
         AppMsg,
@@ -18,6 +19,7 @@ use crate::{
         GameRxBundle,
         GameTelemetry,
         GameToApp,
+        GAME_TICKRATE_HZ,
     },
 };
 use camera::Camera;
@@ -49,7 +51,7 @@ impl Worker for Game {
     type State = GameState;
     type Channels = GameRxBundle;
 
-    fn on_resume(&self, init: Self::Init) -> anyhow::Result<Self::State> {
+    fn on_resume(&self, init: Self::Init) -> Result<Self::State> {
         Ok(GameState {
             input: InputState::new(),
             camera: Camera::new(init.sz),
@@ -58,15 +60,10 @@ impl Worker for Game {
         })
     }
 
-    fn on_tick(
-        this: &mut Self::State,
-        _since_wake: Duration,
-        since_tick: Duration,
-        _tick: usize,
-    ) -> anyhow::Result<()> {
-        let dt = since_tick.as_secs_f32();
+    fn on_tick(this: &mut Self::State, tick: &TickTiming) -> Result<()> {
+        let dt = tick.dt.as_secs_f32();
+        let start = Instant::now();
 
-        this.app_tx.telemetry.send(GameTelemetry { tick_time: dt });
         if let Some(captured) = this.input.take_cursor_capture() {
             this.app_tx.msgs.send(AppMsg::SetCursorCapture(captured));
         }
@@ -76,11 +73,16 @@ impl Worker for Game {
 
         this.camera_tx.write(this.camera.get_state());
 
+        this.app_tx.telemetry.send(GameTelemetry {
+            tick_ms: start.elapsed().as_secs_f32() * 1000.0,
+            lag_ms: tick.lag.as_secs_f32() * 1000.0,
+        });
+
         Ok(())
     }
 
     fn run(self, ctrl: Arc<WorkerControl<Self::Init>>, rx: Self::Channels) {
-        self.run_tickrate(ctrl, rx, 120.0);
+        self.run_tickrate(ctrl, rx, GAME_TICKRATE_HZ);
     }
 }
 

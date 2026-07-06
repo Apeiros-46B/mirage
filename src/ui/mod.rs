@@ -1,33 +1,37 @@
 use egui::{Color32, Context, Ui, Window};
-use egui_plot::{Line, Plot, PlotBounds, PlotPoints, VLine};
+use egui_plot::{HLine, Line, Plot, PlotBounds, PlotPoints, VLine};
 use winit::event_loop::ActiveEventLoop;
 
 use crate::{
     sync::worker::MessageHandler,
     util::HistoryRing,
-    workers::msgs::{GameTelemetry, RendererTelemetry},
+    workers::msgs::{GAME_TICKRATE_HZ, GameTelemetry, RendererTelemetry},
 };
 
-pub const HISTORY_CAPACITY: usize = 128;
+pub const HISTORY_CAPACITY: usize = 256;
 
 pub struct UIState {
-    pub frame_time: f32,
-    pub frame_time_hist: HistoryRing<f32>,
-    pub tick_time: f32,
-    pub tick_time_hist: HistoryRing<f32>,
+    pub frame_time: f32, // seconds
+    pub frame_ms_hist: HistoryRing<f32>, // ms
+    pub tick_ms: f32, // ms
+    pub tick_ms_hist: HistoryRing<f32>,
+    pub lag_ms: f32, // ms
+    pub lag_ms_hist: HistoryRing<f32>,
 }
 
 impl MessageHandler<GameTelemetry> for UIState {
     fn handle(&mut self, msg: GameTelemetry) {
-        self.tick_time = msg.tick_time;
-        self.tick_time_hist.write(msg.tick_time * 1000.0);
+        self.tick_ms = msg.tick_ms;
+        self.tick_ms_hist.write(msg.tick_ms);
+        self.lag_ms = msg.lag_ms;
+        self.lag_ms_hist.write(msg.lag_ms);
     }
 }
 
 impl MessageHandler<RendererTelemetry> for UIState {
     fn handle(&mut self, msg: RendererTelemetry) {
-        self.frame_time = msg.frame_time;
-        self.frame_time_hist.write(msg.frame_time * 1000.0);
+        self.frame_time = msg.frame_ms;
+        self.frame_ms_hist.write(msg.frame_ms * 1000.0);
     }
 }
 
@@ -35,9 +39,11 @@ impl Default for UIState {
     fn default() -> Self {
         Self {
             frame_time: 0.0,
-            frame_time_hist: HistoryRing::new(HISTORY_CAPACITY, 0.0),
-            tick_time: 0.0,
-            tick_time_hist: HistoryRing::new(HISTORY_CAPACITY, 0.0),
+            frame_ms_hist: HistoryRing::new(HISTORY_CAPACITY, 0.0),
+            tick_ms: 0.0,
+            tick_ms_hist: HistoryRing::new(HISTORY_CAPACITY, 0.0),
+            lag_ms: 0.0,
+            lag_ms_hist: HistoryRing::new(HISTORY_CAPACITY, 0.0),
         }
     }
 }
@@ -68,21 +74,25 @@ pub fn ui_main(state: &UIState, resp: &mut UIResponse, ctx: &Context) {
 }
 
 fn debug_window(state: &UIState, resp: &mut UIResponse, ui: &mut Ui) {
-    let tps = 1.0 / state.tick_time;
+    let budget_ms = 1000.0 / GAME_TICKRATE_HZ as f32;
     let fps = 1.0 / state.frame_time;
 
-    ui.label(format!("tick {:07.4}ms {tps:.0}/s", state.tick_time * 1000.0));
-    sparkline(ui, "tick_time", &state.tick_time_hist);
+    ui.label(format!(
+        "tick {:06.3}ms / budget {:06.3}ms / lag {:06.3}ms",
+        state.tick_ms, budget_ms, state.lag_ms,
+    ));
+    sparkline(ui, "tick_compute", &state.tick_ms_hist, Some(budget_ms));
+    sparkline(ui, "tick_lag", &state.lag_ms_hist, None);
 
-    ui.label(format!("frame {:07.4}ms {fps:.0}/s", state.frame_time * 1000.0));
-    sparkline(ui, "frame_time", &state.frame_time_hist);
+    ui.label(format!("frame {:06.3}ms {fps:.0}/s", state.frame_time * 1000.0));
+    sparkline(ui, "frame_time", &state.frame_ms_hist, None);
 
     if ui.button("Quit").clicked() {
         resp.should_exit = true;
     }
 }
 
-fn sparkline(ui: &mut Ui, id: &str, hist: &HistoryRing<f32>) {
+fn sparkline(ui: &mut Ui, id: &str, hist: &HistoryRing<f32>, budget: Option<f32>) {
     let points: PlotPoints = hist.iter_head(f32::NAN)
         .enumerate()
         .map(|(i, v)| [i as f64, v.into()])
@@ -107,8 +117,13 @@ fn sparkline(ui: &mut Ui, id: &str, hist: &HistoryRing<f32>) {
         .show(ui, |plot| {
             plot.set_plot_bounds(PlotBounds::from_min_max(
                 [0.0, 0.0],
-                [HISTORY_CAPACITY as f64, 20.0]
+                [HISTORY_CAPACITY as f64, 20.0],
             ));
+            if let Some(b) = budget {
+                plot.hline(HLine::new("budget", b as f64)
+                    .color(Color32::from_rgb(220, 80, 80))
+                    .width(1.0));
+            }
             plot.line(data);
             plot.vline(sweep);
         });
