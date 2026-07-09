@@ -24,12 +24,11 @@ mod passes;
 mod resources;
 
 use anyhow::Result;
-use ash::vk;
 use winit::dpi::PhysicalSize;
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    gpu::{ctx::{Destroy, VulkanCtx}, sync::ImageBarrierExt, task::Task},
+    gpu::{ctx::{Destroy, VulkanCtx}, task::Task},
     sync::{chan::SafeSend, worker::{MessageHandler, TickTiming, Worker}},
     workers::msgs::{
         CameraState,

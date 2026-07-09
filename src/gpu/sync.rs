@@ -71,3 +71,14 @@ impl ImageBarrierExt for vk::ImageMemoryBarrier2<'_> {
             .image_memory_barriers(std::slice::from_ref(self))
     }
 }
+
+pub trait BufferBarrierExt {
+    fn dep_info(&self) -> vk::DependencyInfo<'_>;
+}
+
+impl BufferBarrierExt for vk::BufferMemoryBarrier2<'_> {
+    fn dep_info(&self) -> vk::DependencyInfo<'_> {
+        vk::DependencyInfo::default()
+            .buffer_memory_barriers(std::slice::from_ref(self))
+    }
+}

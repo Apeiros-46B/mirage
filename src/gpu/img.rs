@@ -4,7 +4,7 @@ use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme};
 
 use crate::gpu::ctx::{Destroy, Recreate, VulkanCtx};
 
-pub struct GPUImage {
+pub struct AllocatedImage {
     pub img: vk::Image,
     pub view: vk::ImageView,
     pub mem: Option<Allocation>,
@@ -12,7 +12,7 @@ pub struct GPUImage {
     pub extent: vk::Extent3D,
 }
 
-impl Destroy for GPUImage {
+impl Destroy for AllocatedImage {
     unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
         unsafe {
             ctx.dev.destroy_image_view(self.view, None);
@@ -24,7 +24,7 @@ impl Destroy for GPUImage {
     }
 }
 
-impl Recreate for GPUImage {
+impl Recreate for AllocatedImage {
     type Item = Self;
 
     unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, mut f: F) -> Result<()>
@@ -37,7 +37,7 @@ impl Recreate for GPUImage {
     }
 }
 
-impl GPUImage {
+impl AllocatedImage {
     pub fn new(
         ctx: &VulkanCtx,
         extent: vk::Extent3D,

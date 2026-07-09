@@ -9,7 +9,7 @@ use crate::{
     gpu::{
         ctx::{Destroy, VulkanCtx},
         desc::DescriptorAllocator,
-        img::GPUImage,
+        img::AllocatedImage,
     },
     workers::{msgs::CameraState, renderer::frames::{PerFrame, RenderTarget}},
 };
@@ -17,11 +17,11 @@ use crate::{
 pub struct Resources {
     pub desc: DescriptorAllocator,
 
-    depth: PerFrame<GPUImage>,
+    depth: PerFrame<AllocatedImage>,
     depth_idxs: PerFrame<u32>,
-    color: PerFrame<GPUImage>,
+    color: PerFrame<AllocatedImage>,
     color_idxs: PerFrame<u32>,
-    visbuf: PerFrame<GPUImage>,
+    visbuf: PerFrame<AllocatedImage>,
     visbuf_idxs: PerFrame<u32>,
 
     camera_rx: Output<CameraState>,
@@ -93,8 +93,8 @@ impl Resources {
     }
 
     pub fn view(&mut self, target: &mut RenderTarget<'_>) -> ResourceView<'_> {
-        let mut camera_buf = target.tmp_arena.alloc_of::<CameraState>();
-        unsafe { camera_buf.write(self.camera_rx.read()); }
+        let mut camera_buf = target.arena.alloc_scratch::<CameraState>();
+        camera_buf.write(self.camera_rx.read());
 
         ResourceView {
             camera_bda: camera_buf.bda,
@@ -112,11 +112,11 @@ impl Resources {
 pub struct ResourceView<'a> {
     pub camera_bda: u64, // BDA pointer to CameraState
 
-    pub depth: &'a GPUImage,
+    pub depth: &'a AllocatedImage,
     pub depth_idx: u32,
-    pub visbuf: &'a GPUImage,
+    pub visbuf: &'a AllocatedImage,
     pub visbuf_idx: u32,
-    pub color: &'a GPUImage,
+    pub color: &'a AllocatedImage,
     pub color_idx: u32,
 }
 
@@ -151,9 +151,9 @@ const DEPTH_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange 
 fn make_depth_targets(
     ctx: &VulkanCtx,
     extent: vk::Extent2D,
-) -> Result<PerFrame<GPUImage>> {
+) -> Result<PerFrame<AllocatedImage>> {
     PerFrame::try_init(|_| {
-        GPUImage::new(
+        AllocatedImage::new(
             ctx,
             extent.into(),
             vk::Format::D32_SFLOAT,
@@ -175,9 +175,9 @@ const COLOR_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange 
 fn make_color_targets(
     ctx: &VulkanCtx,
     extent: vk::Extent2D,
-) -> Result<PerFrame<GPUImage>> {
+) -> Result<PerFrame<AllocatedImage>> {
     PerFrame::try_init(|_| {
-        GPUImage::new(
+        AllocatedImage::new(
             ctx,
             extent.into(),
             vk::Format::R8G8B8A8_UNORM,
@@ -191,9 +191,9 @@ fn make_color_targets(
 fn make_visbuf_targets(
     ctx: &VulkanCtx,
     extent: vk::Extent2D,
-) -> Result<PerFrame<GPUImage>> {
+) -> Result<PerFrame<AllocatedImage>> {
     PerFrame::try_init(|_| {
-        GPUImage::new(
+        AllocatedImage::new(
             ctx,
             extent.into(),
             vk::Format::R64_UINT,

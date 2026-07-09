@@ -8,7 +8,7 @@ use winit::dpi::PhysicalSize;
 use crate::{
     gpu::{
         ctx::{Destroy, VulkanCtx},
-        img::GPUImage,
+        img::AllocatedImage,
         sync::ImageBarrierExt,
         task::Task,
     },
@@ -36,8 +36,8 @@ pub struct EguiPass {
     sampler: vk::Sampler,
 
     // images are guaranteed to never exist in both of these collections at once
-    textures: HashMap<TextureId, (GPUImage, vk::DescriptorSet)>,
-    unused_textures: PerFrame<Vec<GPUImage>>,
+    textures: HashMap<TextureId, (AllocatedImage, vk::DescriptorSet)>,
+    unused_textures: PerFrame<Vec<AllocatedImage>>,
     unused_desc_sets: PerFrame<Vec<vk::DescriptorSet>>,
 }
 
@@ -283,15 +283,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
                 ),
             };
 
-            let staging_sz = pixels.len() as u64;
-            let staging = frame.in_flight.tmp_arena.alloc(staging_sz, 16);
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    pixels.as_ptr(),
-                    staging.ptr.0,
-                    pixels.len(),
-                );
-            }
+            let staging = frame.in_flight.arena.stage_bytes(pixels);
 
             let extent = vk::Extent3D { width, height, depth: 1 };
             let subres_range = vk::ImageSubresourceRange::default()
@@ -299,22 +291,21 @@ impl Task<FrameCtx<'_>> for EguiPass {
                 .level_count(1)
                 .layer_count(1);
 
-            let copy_region = vk::BufferImageCopy::default()
-                .buffer_offset(staging.ofs)
-                .image_subresource(vk::ImageSubresourceLayers {
+            let offset_3d = if let Some(pos) = delta.pos {
+                vk::Offset3D { x: pos[0] as i32, y: pos[1] as i32, z: 0 }
+            } else {
+                vk::Offset3D { x: 0, y: 0, z: 0 }
+            };
+            let copy_region = staging.get_buf_img_copy(
+                vk::ImageSubresourceLayers {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     mip_level: 0,
                     base_array_layer: 0,
                     layer_count: 1,
-                })
-                .image_offset(
-                    if let Some(pos) = delta.pos {
-                        vk::Offset3D { x: pos[0] as i32, y: pos[1] as i32, z: 0 }
-                    } else {
-                        vk::Offset3D { x: 0, y: 0, z: 0 }
-                    },
-                )
-                .image_extent(extent);
+                },
+                offset_3d,
+                extent,
+            );
 
             if let Some(_pos) = delta.pos {
                 // {{{ update to existing image
@@ -353,7 +344,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
                 // }}}
             } else {
                 // {{{ new image
-                let img = GPUImage::new(
+                let img = AllocatedImage::new(
                     ctx,
                     extent,
                     vk::Format::R8G8B8A8_UNORM,
@@ -434,8 +425,8 @@ impl Task<FrameCtx<'_>> for EguiPass {
             }
         }
 
-        let vbo = frame.in_flight.tmp_arena.alloc(total_vert_sz as u64, 16);
-        let ibo = frame.in_flight.tmp_arena.alloc(total_idx_sz as u64, 16);
+        let vbo = frame.in_flight.arena.alloc_raw_scratch(total_vert_sz as u64, 16);
+        let ibo = frame.in_flight.arena.alloc_raw_scratch(total_idx_sz as u64, 16);
         let mut vert_ptr = vbo.ptr.0;
         let mut idx_ptr = ibo.ptr.0;
 
