@@ -53,19 +53,6 @@ impl<T: Destroy> Destroy for Option<T> {
     }
 }
 
-
-pub trait Recreate: Destroy {
-    type Item;
-
-    /// recreates the Vulkan resource
-    unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, f: F) -> Result<()>
-    where
-        F: FnMut() -> Result<Self::Item>;
-}
-
-// TODO: impl Recreate for Vec<T: Recreate>
-
-
 fn create_dev(
     inst: &ash::Instance,
     sel: &GPU,

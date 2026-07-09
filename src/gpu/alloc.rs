@@ -7,7 +7,7 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
 };
 
-use crate::gpu::{MappedPtr, ctx::{Destroy, Recreate, VulkanCtx}};
+use crate::gpu::{MappedPtr, ctx::{Destroy, VulkanCtx}};
 
 /// gpu-only megabuffer
 pub struct AllocatedMegabuffer {
@@ -22,19 +22,6 @@ impl Destroy for AllocatedMegabuffer {
         if let Some(mem) = self.mem.take() {
             ctx.alloc.lock().unwrap().free(mem).unwrap();
         }
-    }
-}
-
-impl Recreate for AllocatedMegabuffer {
-    type Item = Self;
-
-    unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, mut f: F) -> Result<()>
-    where
-        F: FnMut() -> Result<Self::Item>,
-    {
-        unsafe { self.destroy(ctx); }
-        *self = f()?;
-        Ok(())
     }
 }
 

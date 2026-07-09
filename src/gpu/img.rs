@@ -2,7 +2,7 @@ use anyhow::Result;
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme};
 
-use crate::gpu::ctx::{Destroy, Recreate, VulkanCtx};
+use crate::gpu::ctx::{Destroy, VulkanCtx};
 
 pub struct AllocatedImage {
     pub img: vk::Image,
@@ -21,19 +21,6 @@ impl Destroy for AllocatedImage {
         if let Some(mem) = self.mem.take() {
             ctx.alloc.lock().unwrap().free(mem).unwrap();
         }
-    }
-}
-
-impl Recreate for AllocatedImage {
-    type Item = Self;
-
-    unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, mut f: F) -> Result<()>
-    where
-        F: FnMut() -> Result<Self::Item>,
-    {
-        unsafe { self.destroy(ctx); }
-        *self = f()?;
-        Ok(())
     }
 }
 

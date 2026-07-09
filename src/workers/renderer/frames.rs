@@ -1,11 +1,11 @@
-use std::{ops::{Deref, Index, IndexMut}, slice::{Iter, IterMut}, sync::Arc};
+use std::{ops::{Deref, DerefMut}, slice::{Iter, IterMut}, sync::Arc};
 
 use anyhow::Result;
 use ash::{khr, vk};
 use winit::dpi::PhysicalSize;
 
 use crate::{
-    gpu::{alloc::GPUArena, ctx::{Destroy, Recreate, VulkanCtx}},
+    gpu::{alloc::GPUArena, ctx::{Destroy, VulkanCtx}},
     util::array_try_from_fn,
 };
 
@@ -495,33 +495,27 @@ pub struct PerFrame<T> {
     items: [T; FRAMES_IN_FLIGHT],
 }
 
+impl<T: Destroy> Destroy for PerFrame<T> {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        for item in self.iter_mut() {
+            unsafe {
+                item.destroy(ctx);
+            }
+        }
+    }
+}
+
 impl<T> PerFrame<T> {
     pub fn try_init<F, E>(mut cb: F) -> Result<Self, E>
     where
         F: FnMut(usize) -> Result<T, E>,
     {
-        let items = array_try_from_fn(&mut cb)?;
-        Ok(Self { items })
+        Ok(array_try_from_fn(&mut cb)?.into())
     }
 
-    pub fn init<F>(mut cb: F) -> Self
-    where
-        F: FnMut(usize) -> T,
+    pub fn init<F>(mut cb: F) -> Self where F: FnMut(usize) -> T,
     {
-        let items = std::array::from_fn(&mut cb);
-        Self { items }
-    }
-
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    pub fn iter(&self) -> Iter<'_, T> {
-        self.items.iter()
-    }
-
-    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
-        self.items.iter_mut()
+        std::array::from_fn(&mut cb).into()
     }
 }
 
@@ -539,61 +533,27 @@ impl<T> Deref for PerFrame<T> {
     }
 }
 
-impl<T> Index<usize> for PerFrame<T> {
-    type Output = T;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.items[index]
+impl<T> DerefMut for PerFrame<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.items
     }
 }
 
-impl<T> IndexMut<usize> for PerFrame<T> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.items[index]
+impl<'a, T> IntoIterator for &'a PerFrame<T> {
+    type Item = &'a T;
+    type IntoIter = Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
-impl<T: Destroy> Destroy for PerFrame<T> {
-    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
-        for item in self.iter_mut() {
-            unsafe {
-                item.destroy(ctx);
-            }
-        }
-    }
-}
+impl<'a, T> IntoIterator for &'a mut PerFrame<T> {
+    type Item = &'a mut T;
+    type IntoIter = IterMut<'a, T>;
 
-// TODO: make this more resilient against errors
-impl<T: Destroy> Recreate for PerFrame<T> {
-    type Item = T;
-
-    unsafe fn recreate<F>(&mut self, ctx: &VulkanCtx, mut f: F) -> Result<()>
-    where
-        F: FnMut() -> Result<Self::Item>,
-    {
-        for item in self.iter_mut() {
-            unsafe { item.destroy(ctx); }
-        }
-
-        let mut new_items = Vec::with_capacity(self.len());
-
-        for _ in 0..self.len() {
-            match f() {
-                Ok(new_item) => new_items.push(new_item),
-                Err(e) => {
-                    for mut discarded in new_items {
-                        unsafe { discarded.destroy(ctx); }
-                    }
-                    return Err(e);
-                }
-            }
-        }
-
-        for (item, new_item) in self.iter_mut().zip(new_items.into_iter()) {
-            *item = new_item;
-        }
-
-        Ok(())
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
     }
 }
 // }}}
