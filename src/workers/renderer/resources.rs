@@ -7,11 +7,16 @@ use winit::dpi::PhysicalSize;
 
 use crate::{
     gpu::{
+        alloc::AllocatedMegabuffer,
         ctx::{Destroy, VulkanCtx},
         desc::DescriptorAllocator,
         img::AllocatedImage,
     },
-    workers::{msgs::CameraState, renderer::frames::{PerFrame, RenderTarget}},
+    workers::{
+        msgs::CameraState,
+        renderer::frames::{PerFrame, RenderTarget},
+    },
+    world::{CHUNK_WS_ID_BITS, Chunk},
 };
 
 pub struct Resources {
@@ -25,11 +30,17 @@ pub struct Resources {
     visbuf_idxs: PerFrame<u32>,
 
     camera_rx: Output<CameraState>,
+
+    pub voxel_data: AllocatedMegabuffer,
+    pub chunk_headers: AllocatedMegabuffer,
 }
 
 impl Destroy for Resources {
     unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
         unsafe {
+            self.chunk_headers.destroy(ctx);
+            self.voxel_data.destroy(ctx);
+
             self.depth.destroy(ctx);
             self.color.destroy(ctx);
             self.visbuf.destroy(ctx);
@@ -51,6 +62,18 @@ impl Resources {
         let color = make_color_targets(&ctx, extent)?;
         let visbuf = make_visbuf_targets(&ctx, extent)?;
 
+        let voxel_data = AllocatedMegabuffer::new(
+            &ctx,
+            (1 << 22) * 16, // temporary size, TODO: allocate large heap and suballoc
+            c"voxel_data",
+        )?;
+
+        let chunk_headers = AllocatedMegabuffer::new(
+            &ctx,
+            ((1 << CHUNK_WS_ID_BITS) * size_of::<Chunk>()) as u64,
+            c"chunk_headers",
+        )?;
+
         let mut desc = DescriptorAllocator::new(ctx)?;
         let depth_idxs = desc.alloc_sampled_imgs(&depth).into();
         let color_idxs = desc.alloc_storage_imgs(&color).into();
@@ -65,6 +88,9 @@ impl Resources {
             color_idxs,
             visbuf,
             visbuf_idxs,
+
+            voxel_data,
+            chunk_headers,
 
             camera_rx,
         })
@@ -99,6 +125,10 @@ impl Resources {
         ResourceView {
             camera_bda: camera_buf.bda,
 
+            // TODO: re-passing these unchanged seems inefficient
+            voxel_data: &self.voxel_data,
+            chunk_headers: &self.chunk_headers,
+
             depth: &self.depth[target.idx],
             depth_idx: self.depth_idxs[target.idx],
             color: &self.color[target.idx],
@@ -110,8 +140,14 @@ impl Resources {
 }
 
 pub struct ResourceView<'a> {
+    // dynamic
     pub camera_bda: u64, // BDA pointer to CameraState
 
+    // megabuffers
+    pub voxel_data: &'a AllocatedMegabuffer,
+    pub chunk_headers: &'a AllocatedMegabuffer,
+
+    // per frame
     pub depth: &'a AllocatedImage,
     pub depth_idx: u32,
     pub visbuf: &'a AllocatedImage,

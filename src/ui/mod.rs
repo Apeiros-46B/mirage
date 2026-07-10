@@ -11,11 +11,11 @@ use crate::{
 pub const HISTORY_CAPACITY: usize = 256;
 
 pub struct UIState {
-    pub frame_time: f32, // seconds
-    pub frame_ms_hist: HistoryRing<f32>, // ms
-    pub tick_ms: f32, // ms
+    pub frame_secs: f32,
+    pub frame_secs_hist: HistoryRing<f32>,
+    pub tick_ms: f32,
     pub tick_ms_hist: HistoryRing<f32>,
-    pub lag_ms: f32, // ms
+    pub lag_ms: f32,
     pub lag_ms_hist: HistoryRing<f32>,
 }
 
@@ -30,16 +30,16 @@ impl MessageHandler<GameTelemetry> for UIState {
 
 impl MessageHandler<RendererTelemetry> for UIState {
     fn handle(&mut self, msg: RendererTelemetry) {
-        self.frame_time = msg.frame_ms;
-        self.frame_ms_hist.write(msg.frame_ms * 1000.0);
+        self.frame_secs = msg.frame_secs;
+        self.frame_secs_hist.write(msg.frame_secs * 1000.0);
     }
 }
 
 impl Default for UIState {
     fn default() -> Self {
         Self {
-            frame_time: 0.0,
-            frame_ms_hist: HistoryRing::new(HISTORY_CAPACITY, 0.0),
+            frame_secs: 0.0,
+            frame_secs_hist: HistoryRing::new(HISTORY_CAPACITY, 0.0),
             tick_ms: 0.0,
             tick_ms_hist: HistoryRing::new(HISTORY_CAPACITY, 0.0),
             lag_ms: 0.0,
@@ -67,25 +67,22 @@ pub fn ui_main(state: &UIState, resp: &mut UIResponse, ctx: &Context) {
         style.visuals.popup_shadow.offset = [0, 0];
     });
 
-    Window::new("Debug").show(
-        ctx,
-        |ui| debug_window(state, resp, ui),
-    );
+    Window::new("Timings").show(ctx, |ui| debug_window(state, resp, ui));
 }
 
 fn debug_window(state: &UIState, resp: &mut UIResponse, ui: &mut Ui) {
     let budget_ms = 1000.0 / GAME_TICKRATE_HZ as f32;
-    let fps = 1.0 / state.frame_time;
+    let fps = 1.0 / state.frame_secs;
 
     ui.label(format!(
         "tick {:06.3}ms / budget {:06.3}ms / lag {:06.3}ms",
         state.tick_ms, budget_ms, state.lag_ms,
     ));
-    sparkline(ui, "tick_compute", &state.tick_ms_hist, Some(budget_ms));
-    sparkline(ui, "tick_lag", &state.lag_ms_hist, None);
+    sparkline(ui, "tick_compute_ms", &state.tick_ms_hist, Some(budget_ms));
+    sparkline(ui, "tick_lag_ms", &state.lag_ms_hist, None);
 
-    ui.label(format!("frame {:06.3}ms {fps:.0}/s", state.frame_time * 1000.0));
-    sparkline(ui, "frame_time", &state.frame_ms_hist, None);
+    ui.label(format!("frame {:06.3}ms {fps:.0}/s", state.frame_secs * 1000.0));
+    sparkline(ui, "frame_time_secs", &state.frame_secs_hist, None);
 
     if ui.button("Quit").clicked() {
         resp.should_exit = true;

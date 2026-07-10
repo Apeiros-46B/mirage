@@ -3,7 +3,6 @@
 //! pass architecture:
 //! - compute culling pass: determine which chunks will be rendered
 //! - depth prepass: conservative rasterized depth for all visible chunks (no portals)
-//! - beam prepass: low-resolution beam tracing for refining depth map (portals)
 //! - primary pass: raymarch to build visbuf with voxel IDs (go through portals, report unloaded chunks)
 //! - collect pass: build gpu hash table of voxel IDs
 //! - shade pass: dispatch shading per visible voxel (not per pixel)
@@ -24,6 +23,7 @@ mod passes;
 mod resources;
 
 use anyhow::Result;
+use bytemuck::bytes_of;
 use winit::dpi::PhysicalSize;
 use std::{sync::Arc, time::Duration};
 
@@ -37,7 +37,7 @@ use crate::{
         RendererRxBundle,
         RendererTelemetry,
         RendererToApp,
-    },
+    }, world::{Chunk, ChunkState, Node},
 };
 use frames::{FrameManager, RenderTarget};
 use passes::Passes;
@@ -57,6 +57,9 @@ pub struct RendererState {
 
     app_tx: RendererToApp,
     ctx: Arc<VulkanCtx>,
+
+    // TODO(loader): remove this when chunk streaming is in
+    staged_chunk: bool,
 }
 
 impl Drop for RendererState {
@@ -102,6 +105,8 @@ impl Worker for Renderer {
 
             app_tx: init.app_tx,
             ctx,
+
+            staged_chunk: false,
         })
     }
 
@@ -111,7 +116,7 @@ impl Worker for Renderer {
     ) -> Result<()> {
         let dt = tick.dt.as_secs_f32();
 
-        this.app_tx.telemetry.send(RendererTelemetry { frame_ms: dt });
+        this.app_tx.telemetry.send(RendererTelemetry { frame_secs: dt });
 
         let Some(mut target) = this.manager.begin_frame(&this.ctx)? else {
             if this.manager.is_minimized() {
@@ -135,6 +140,35 @@ impl Worker for Renderer {
             time: tick.since_wake.as_secs_f64(),
             dt,
         };
+
+        // TODO(loader): remove this when chunk streaming is in
+        if !this.staged_chunk {
+            this.staged_chunk = true;
+
+            let node = Node::new()
+                .with_is_leaf(1)
+                .with_is_homogeneous(1)
+                .with_mat_id(1);
+            let chunk = Chunk::new()
+                .with_state(ChunkState::Loaded)
+                .with_root(frame.resources.voxel_data.bda);
+
+            unsafe {
+                this.ctx.dev.cmd_copy_buffer(
+                    frame.in_flight.cmd,
+                    frame.in_flight.arena.buf,
+                    frame.resources.voxel_data.buf,
+                    &[frame.in_flight.arena.stage(&node).get_buf_copy(0)],
+                );
+                this.ctx.dev.cmd_copy_buffer(
+                    frame.in_flight.cmd,
+                    frame.in_flight.arena.buf,
+                    frame.resources.chunk_headers.buf,
+                    &[frame.in_flight.arena.stage(&chunk).get_buf_copy(0)],
+                );
+            }
+        }
+
         unsafe {
             this.passes.execute(&this.ctx, &mut frame)?;
         }

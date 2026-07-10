@@ -38,7 +38,7 @@ pub struct GameTelemetry {
 
 #[derive(Debug)]
 pub struct RendererTelemetry {
-    pub frame_ms: f32,
+    pub frame_secs: f32,
 }
 
 channel_routing_for!(App {

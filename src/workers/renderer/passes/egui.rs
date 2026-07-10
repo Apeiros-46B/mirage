@@ -283,7 +283,7 @@ impl Task<FrameCtx<'_>> for EguiPass {
                 ),
             };
 
-            let staging = frame.in_flight.arena.stage_bytes(pixels);
+            let staging = frame.in_flight.arena.stage_raw(pixels);
 
             let extent = vk::Extent3D { width, height, depth: 1 };
             let subres_range = vk::ImageSubresourceRange::default()

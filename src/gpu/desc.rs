@@ -56,7 +56,8 @@ impl DescriptorAllocator {
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
                 .binding(SAMPLER_BINDING)
-                // BUG: missing stage flags
+                // TODO: probably update this when we need sampling in fsh
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .descriptor_type(vk::DescriptorType::SAMPLER)
                 .descriptor_count(100_000),
             vk::DescriptorSetLayoutBinding::default()

@@ -264,11 +264,15 @@ impl GPUArena {
         }
     }
 
-    pub fn stage_bytes(&mut self, bytes: &[u8]) -> StagingSlice {
+    pub fn stage_raw(&mut self, bytes: &[u8]) -> StagingSlice {
         // TODO: optimalBufferCopyOffsetAlignment instead of hardcoded 16
         let mut s = self.alloc_staging(bytes.len() as u64, 16);
         unsafe { s.write_bytes(bytes, 0) };
         s
+    }
+
+    pub fn stage<T: bytemuck::NoUninit>(&mut self, obj: &T) -> StagingSlice {
+        self.stage_raw(bytemuck::bytes_of(obj))
     }
 }
 
