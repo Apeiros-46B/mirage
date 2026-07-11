@@ -37,7 +37,7 @@ use crate::{
         RendererRxBundle,
         RendererTelemetry,
         RendererToApp,
-    }, world::{Chunk, ChunkState, Node},
+    }, world::{ChunkAABBPtr, ChunkMetadata, ChunkState, Node},
 };
 use frames::{FrameManager, RenderTarget};
 use passes::Passes;
@@ -133,44 +133,46 @@ impl Worker for Renderer {
             }
         }
 
-        let mut frame = FrameCtx {
-            resources: this.resources.view(&mut target),
-            in_flight: target,
-            frame_idx: tick.n,
-            time: tick.since_wake.as_secs_f64(),
-            dt,
-        };
-
         // TODO(loader): remove this when chunk streaming is in
         if !this.staged_chunk {
             this.staged_chunk = true;
 
-            let node = Node::new()
-                .with_is_leaf(1)
-                .with_is_homogeneous(1)
-                .with_mat_id(1);
-            let chunk = Chunk::new()
-                .with_state(ChunkState::Loaded)
-                .with_root(frame.resources.voxel_data.bda);
+            let node = Node::new().with_child_mask(0).with_mat_id(1);
+            let chunk_meta = ChunkMetadata::new().with_state(ChunkState::Loaded);
 
             unsafe {
                 this.ctx.dev.cmd_copy_buffer(
-                    frame.in_flight.cmd,
-                    frame.in_flight.arena.buf,
-                    frame.resources.voxel_data.buf,
-                    &[frame.in_flight.arena.stage(&node).get_buf_copy(0)],
+                    target.cmd,
+                    target.arena.buf,
+                    this.resources.voxel_data.buf,
+                    &[target.arena.stage(&node).get_buf_copy(0)],
                 );
+
+                let roots_src = target.arena.stage(&this.resources.voxel_data.bda);
+                let meta_src = target.arena.stage(&chunk_meta);
+                let aabb_src = target.arena.stage(&ChunkAABBPtr::new());
+
                 this.ctx.dev.cmd_copy_buffer(
-                    frame.in_flight.cmd,
-                    frame.in_flight.arena.buf,
-                    frame.resources.chunk_headers.buf,
-                    &[frame.in_flight.arena.stage(&chunk).get_buf_copy(0)],
+                    target.cmd,
+                    target.arena.buf,
+                    this.resources.chunk_headers.buf(),
+                    &[
+                        this.resources.chunk_headers.roots.copy_from(&roots_src),
+                        this.resources.chunk_headers.metadata.copy_from(&meta_src),
+                        this.resources.chunk_headers.aabb_ptrs.copy_from(&aabb_src),
+                    ],
                 );
             }
         }
 
         unsafe {
-            this.passes.execute(&this.ctx, &mut frame)?;
+            this.passes.execute(&this.ctx, &mut FrameCtx {
+                resources: this.resources.view(&mut target),
+                in_flight: target,
+                frame_idx: tick.n,
+                time: tick.since_wake.as_secs_f64(),
+                dt,
+            })?;
         }
 
         this.manager.submit_frame(&this.ctx)

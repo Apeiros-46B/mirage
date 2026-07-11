@@ -1,8 +1,12 @@
 import shared.camera;
+import shared.world;
 
 struct PushConstants {
 	CameraState* camera;
-	uint64_t worldBda;
+	uint64_t voxelDataBda;
+	uint64_t chunkRootsBda;
+	uint64_t chunkMetadataBda;
+	uint64_t chunkAabbPtrsBda;
 	uint32_t depthIdx;
 	uint32_t visbufIdx;
 	uint32_t extentX;
@@ -25,12 +29,17 @@ void main(uint3 threadId : SV_DispatchThreadID) {
 	Texture2D<float> depthTex = depthTextures[push.depthIdx];
 	RWTexture2D<uint64_t> visbufTex = visbufTextures[push.visbufIdx];
 
-	float depth = depthTex.Load(threadId);
+	float rawDepth = depthTex.Load(threadId);
 
-	if (depth == 1.0) {
-		// guaranteed no hit
+	if (rawDepth == 1.0) {
+		// guaranteed no hit, there is no chunk on that pixel
 		visbufTex.Store(threadId.xy, 0);
 	} else {
+		float2 uv = float2(threadId.xy) / float2(push.extentX, push.extentY);
+		float depth = push.camera.linearizeDepth(uv, rawDepth);
+		Ray primary = push.camera.primaryRay(uv);
+		Ray start = primary.advanced(depth);
+
 		// TODO: trace rays to get actual voxel ID
 		visbufTex.Store(threadId.xy, 1);
 	}

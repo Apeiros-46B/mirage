@@ -16,8 +16,49 @@ use crate::{
         msgs::CameraState,
         renderer::frames::{PerFrame, RenderTarget},
     },
-    world::{CHUNK_WS_ID_BITS, Chunk},
+    world::{CHUNK_WS_N, ChunkAABBPtr, ChunkMetadata},
 };
+
+pub struct ChunkHeaders {
+    // owner
+    data: AllocatedMegabuffer,
+
+    // views, each parallel array allocated contiguously
+    pub roots: AllocatedMegabuffer, // hot, accessed by raymarcher
+    pub metadata: AllocatedMegabuffer, // cold
+    pub aabb_ptrs: AllocatedMegabuffer, // hot, accessed by rasterizer
+}
+
+impl Destroy for ChunkHeaders {
+    unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        unsafe { self.data.destroy(ctx); }
+    }
+}
+
+impl ChunkHeaders {
+    fn new(ctx: &VulkanCtx) -> Result<Self> {
+        let roots_sz = (CHUNK_WS_N * size_of::<u64>()) as u64;
+        let metadata_sz = (CHUNK_WS_N * size_of::<ChunkMetadata>()) as u64;
+        let aabb_ptrs_sz = (CHUNK_WS_N * size_of::<ChunkAABBPtr>()) as u64;
+
+        let data = AllocatedMegabuffer::new_alloc(
+            &ctx,
+            roots_sz + metadata_sz + aabb_ptrs_sz,
+            c"chunk_headers",
+        )?;
+
+        unsafe {
+            let roots = data.view(0, roots_sz);
+            let metadata = data.view(roots_sz, metadata_sz);
+            let aabb_ptrs = data.view(roots_sz + metadata_sz, aabb_ptrs_sz);
+            Ok(Self { data, roots, metadata, aabb_ptrs })
+        }
+    }
+
+    pub fn buf(&self) -> vk::Buffer {
+        self.data.buf
+    }
+}
 
 pub struct Resources {
     pub desc: DescriptorAllocator,
@@ -32,7 +73,7 @@ pub struct Resources {
     camera_rx: Output<CameraState>,
 
     pub voxel_data: AllocatedMegabuffer,
-    pub chunk_headers: AllocatedMegabuffer,
+    pub chunk_headers: ChunkHeaders,
 }
 
 impl Destroy for Resources {
@@ -62,17 +103,12 @@ impl Resources {
         let color = make_color_targets(&ctx, extent)?;
         let visbuf = make_visbuf_targets(&ctx, extent)?;
 
-        let voxel_data = AllocatedMegabuffer::new(
+        let voxel_data = AllocatedMegabuffer::new_alloc(
             &ctx,
             (1 << 22) * 16, // temporary size, TODO: allocate large heap and suballoc
             c"voxel_data",
         )?;
-
-        let chunk_headers = AllocatedMegabuffer::new(
-            &ctx,
-            ((1 << CHUNK_WS_ID_BITS) * size_of::<Chunk>()) as u64,
-            c"chunk_headers",
-        )?;
+        let chunk_headers = ChunkHeaders::new(&ctx)?;
 
         let mut desc = DescriptorAllocator::new(ctx)?;
         let depth_idxs = desc.alloc_sampled_imgs(&depth).into();
@@ -125,9 +161,10 @@ impl Resources {
         ResourceView {
             camera_bda: camera_buf.bda,
 
-            // TODO: re-passing these unchanged seems inefficient
-            voxel_data: &self.voxel_data,
-            chunk_headers: &self.chunk_headers,
+            voxel_data_bda: self.voxel_data.bda,
+            chunk_roots_bda: self.chunk_headers.roots.bda,
+            chunk_metadata_bda: self.chunk_headers.metadata.bda,
+            chunk_aabb_ptrs_bda: self.chunk_headers.aabb_ptrs.bda,
 
             depth: &self.depth[target.idx],
             depth_idx: self.depth_idxs[target.idx],
@@ -143,9 +180,11 @@ pub struct ResourceView<'a> {
     // dynamic
     pub camera_bda: u64, // BDA pointer to CameraState
 
-    // megabuffers
-    pub voxel_data: &'a AllocatedMegabuffer,
-    pub chunk_headers: &'a AllocatedMegabuffer,
+    // world buffer BDAs (handles stay on Resources for staging)
+    pub voxel_data_bda: u64,
+    pub chunk_roots_bda: u64,
+    pub chunk_metadata_bda: u64,
+    pub chunk_aabb_ptrs_bda: u64,
 
     // per frame
     pub depth: &'a AllocatedImage,

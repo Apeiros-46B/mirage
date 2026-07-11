@@ -13,12 +13,15 @@ use crate::gpu::{MappedPtr, ctx::{Destroy, VulkanCtx}};
 pub struct AllocatedMegabuffer {
     mem: Option<Allocation>,
     pub buf: vk::Buffer,
+    /// pre-applied offset
     pub bda: u64,
+    pub ofs: u64,
     pub sz: u64,
 }
 
 impl Destroy for AllocatedMegabuffer {
     unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
+        // None = it's a view, not the owner
         if let Some(mem) = self.mem.take() {
             ctx.alloc.lock().unwrap().free(mem).unwrap();
         }
@@ -26,7 +29,7 @@ impl Destroy for AllocatedMegabuffer {
 }
 
 impl AllocatedMegabuffer {
-    pub fn new(
+    pub fn new_alloc(
         ctx: &VulkanCtx,
         sz: u64,
         name: &std::ffi::CStr,
@@ -58,7 +61,24 @@ impl AllocatedMegabuffer {
         let bda_info = vk::BufferDeviceAddressInfo::default().buffer(buf);
         let bda = unsafe { ctx.dev.get_buffer_device_address(&bda_info) };
 
-        Ok(Self { mem: Some(mem), buf, bda, sz })
+        Ok(Self { mem: Some(mem), buf, bda, ofs: 0, sz })
+    }
+
+    /// no bounds checking is done
+    pub unsafe fn view(&self, ofs: u64, sz: u64) -> Self {
+        Self {
+            mem: None,
+            buf: self.buf,
+            bda: self.bda + ofs,
+            ofs,
+            sz,
+        }
+    }
+
+    /// build a copy region from a staged slice into this view's offset
+    pub fn copy_from(&self, src: &StagingSlice) -> vk::BufferCopy {
+        debug_assert!(self.mem.is_none()); // must be a view
+        src.get_buf_copy(self.ofs)
     }
 }
 

@@ -23,7 +23,10 @@ pub struct PrimaryPass {
 #[repr(C)]
 struct PushConstants {
     camera_bda: u64,
-    world_bda: u64,
+    voxel_data_bda: u64,
+    chunk_roots_bda: u64,
+    chunk_metadata_bda: u64,
+    chunk_aabb_ptrs_bda: u64,
     depth_idx: u32,
     visbuf_idx: u32,
     extent_x: u32,
@@ -120,7 +123,10 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
                 0,
                 bytemuck::bytes_of(&PushConstants {
                     camera_bda: frame.resources.camera_bda,
-                    world_bda: 0,
+                    voxel_data_bda: frame.resources.voxel_data_bda,
+                    chunk_roots_bda: frame.resources.chunk_roots_bda,
+                    chunk_metadata_bda: frame.resources.chunk_metadata_bda,
+                    chunk_aabb_ptrs_bda: frame.resources.chunk_aabb_ptrs_bda,
                     depth_idx: frame.resources.depth_idx,
                     visbuf_idx: frame.resources.visbuf_idx,
                     extent_x: frame.resources.color.extent.width,
