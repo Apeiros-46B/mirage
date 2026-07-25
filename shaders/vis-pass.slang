@@ -11,21 +11,29 @@ ConstantBuffer<PushConstants> push;
 [[vk::binding(2, 0)]] RWTexture2D<uint64_t> visbufTextures[];
 [[vk::binding(2, 0)]] RWTexture2D<float4> colorTextures[];
 
+#define DEBUG_COLOR
+
 float3 id_to_color(uint64_t v) {
 	// no voxel hit
-	if (v == 0) return float3(1.0, 1.0, 1.0);
+	if (v == 0xFFFFFFFFFFFFFFFF) return float3(1.0, 1.0, 1.0);
 
+#ifdef DEBUG_COLOR
+	uint r = uint(v) & 255;
+	uint g = uint(v >> 8) & 255;
+	uint b = uint(v >> 16) & 255;
+#else
 	uint state = uint(v ^ (v >> 32));
 
 	// PCG hash
 	uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
 	word = (word >> 22u) ^ word;
 
-	float r = float(word & 255) / 255.0;
-	float g = float((word >> 8) & 255) / 255.0;
-	float b = float((word >> 16) & 255) / 255.0;
+	uint r = word & 255;
+	uint g = (word >> 8) & 255;
+	uint b = (word >> 16) & 255;
+#endif
 
-	return float3(r, g, b);
+	return float3(r, g, b) / 255.0;
 }
 
 [shader("compute")]

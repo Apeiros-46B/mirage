@@ -33,14 +33,24 @@ void main(uint3 threadId : SV_DispatchThreadID) {
 
 	if (rawDepth == 1.0) {
 		// guaranteed no hit, there is no chunk on that pixel
-		visbufTex.Store(threadId.xy, 0);
+		visbufTex.Store(threadId.xy, 0xFFFFFFFFFFFFFFFF);
 	} else {
-		float2 uv = float2(threadId.xy) / float2(push.extentX, push.extentY);
+		float2 uv = (float2(threadId.xy) + 0.5) / float2(push.extentX, push.extentY);
 		float depth = push.camera.linearizeDepth(uv, rawDepth);
 		Ray primary = push.camera.primaryRay(uv);
-		Ray start = primary.advanced(depth);
+		Ray start = primary.advanced(depth + 0.001);
 
 		// TODO: trace rays to get actual voxel ID
-		visbufTex.Store(threadId.xy, 1);
+		// this is just temporary for debugging ray hit pos
+		int x = int(floor(start.pos.x + 0.0001)) % 16;
+		int y = int(floor(start.pos.y + 0.0001)) % 16;
+		int z = int(floor(start.pos.z + 0.0001)) % 16;
+
+		uint64_t v = 0;
+		v |= (uint64_t(x) & 0xFF);
+		v |= (uint64_t(y) & 0xFF) << 8;
+		v |= (uint64_t(z) & 0xFF) << 16;
+
+		visbufTex.Store(threadId.xy, v);
 	}
 }

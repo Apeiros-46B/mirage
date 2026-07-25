@@ -2,7 +2,7 @@ use bytemuck::NoUninit;
 use modular_bitfield::{Specifier, bitfield, prelude::*};
 
 pub const CHUNK_WS_ID_BITS: usize = 20;
-pub const REALM_WS_ID_BITS: usize = 8;
+pub const REALM_WS_ID_BITS: usize = 3;
 pub const PORTALS_PER_CHUNK: usize = 32;
 pub const CHUNK_WS_N: usize = 1 << CHUNK_WS_ID_BITS;
 pub const REALM_WS_N: usize = 1 << REALM_WS_ID_BITS;

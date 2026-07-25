@@ -14,7 +14,6 @@ const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/depth-prepass.spv")
 pub struct DepthPrepass {
     pipeline: vk::Pipeline,
     layout: vk::PipelineLayout,
-    world_bda: u64,
 }
 
 impl Destroy for DepthPrepass {
@@ -115,7 +114,6 @@ impl DepthPrepass {
         Ok(Self {
             pipeline,
             layout,
-            world_bda: 0,
         })
     }
 }
@@ -155,7 +153,12 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
                 self.layout,
                 vk::ShaderStageFlags::VERTEX,
                 0,
-                bytemuck::bytes_of(&[frame.resources.camera_bda, self.world_bda]),
+                bytemuck::bytes_of(&[
+                    frame.resources.camera_bda,
+                    // TODO: bda pointers to aabb pools for each lod
+                    0u64, 0u64, 0u64, 0u64,
+                    frame.resources.chunk_aabb_ptrs_bda,
+                ]),
             );
 
             let viewport = vk::Viewport {

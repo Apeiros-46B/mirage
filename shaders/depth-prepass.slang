@@ -2,7 +2,8 @@ import shared.camera;
 
 struct PushConstants {
 	CameraState* camera;
-	uint64_t worldBda;
+	uint64_t aabbPoolsBda[4]; // indexed by LOD level
+	uint64_t aabbPtrsBda;
 };
 
 [[vk::push_constant]]
