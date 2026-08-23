@@ -1,3 +1,4 @@
+// TODO: camera-relative rendering
 // matches crate::workers::msgs::CameraState
 struct CameraState {
 	float4x4 viewProj;

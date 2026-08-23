@@ -55,36 +55,6 @@ struct ChunkMetadata {
 	}
 }
 
-struct ChunkAABBPtr {
-	uint32_t data;
-
-	property uint ofs {
-		get { return uint(bitfieldExtract(data, 0, 30)); }
-		set { data = bitfieldInsert(data, uint32_t(newValue), 0, 30); }
-	}
-	property uint lod {
-		get { return uint(bitfieldExtract(data, 30, 2)); }
-		set { data = bitfieldInsert(data, uint32_t(newValue), 30, 2); }
-	}
-}
-
-struct ChunkAABB {
-	uint32_t data;
-
-	property uint x {
-		get { return uint(bitfieldExtract(data, 0, 8)); }
-		set { data = bitfieldInsert(data, uint32_t(newValue), 0, 8); }
-	}
-	property uint y {
-		get { return uint(bitfieldExtract(data, 8, 8)); }
-		set { data = bitfieldInsert(data, uint32_t(newValue), 8, 8); }
-	}
-	property uint z {
-		get { return uint(bitfieldExtract(data, 16, 8)); }
-		set { data = bitfieldInsert(data, uint32_t(newValue), 16, 8); }
-	}
-}
-
 // 128-bit, child_mask == 0 means leaf
 // if leaf, payload = mat_id and oct_normal
 // otherwise payload = child_ofs (index of 64-node slabs, not single nodes)

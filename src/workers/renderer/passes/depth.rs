@@ -155,9 +155,7 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
                 0,
                 bytemuck::bytes_of(&[
                     frame.resources.camera_bda,
-                    // TODO: bda pointers to aabb pools for each lod
-                    0u64, 0u64, 0u64, 0u64,
-                    frame.resources.chunk_aabb_ptrs_bda,
+                    frame.resources.chunk_metadata_bda,
                 ]),
             );
 
@@ -177,14 +175,7 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
             };
             ctx.dev.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
 
-            // hardcoded single chunk, vsh calculates cube corners using gl_VertexIndex
-            //
-            // later when chunks are dynamically loaded and culled, direct draw is replaced by
-            // - binding an indirect buffer (filled by the compute culler)
-            // - binding a buffer of `ChunkAABB` data (containing coords, chunk ID, and maybe LOD)
-            // - `ctx.dev.cmd_draw_indirect(cmd, indirect_buf, ...)`
-
-            ctx.dev.cmd_draw(cmd, 36, 1, 0, 0);
+            ctx.dev.cmd_draw(cmd, 36, frame.resources.num_chunks, 0, 0);
             ctx.dev.cmd_end_rendering(cmd);
         }
 

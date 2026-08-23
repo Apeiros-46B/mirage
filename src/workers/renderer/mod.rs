@@ -4,7 +4,7 @@
 //! - compute culling pass: determine which chunks will be rendered
 //! - depth prepass: conservative rasterized depth for all visible chunks (no portals)
 //! - primary pass: raymarch to build visbuf with voxel IDs (go through portals, report unloaded chunks)
-//! - collect pass: build gpu hash table of voxel IDs
+//! - collect pass: build deduplicated list of voxel IDs
 //! - shade pass: dispatch shading per visible voxel (not per pixel)
 //! - resolve pass: apply colors to visbuf based on shading results
 //! - blit pass: blit shaded image to swapchain
@@ -23,7 +23,6 @@ mod passes;
 mod resources;
 
 use anyhow::Result;
-use bytemuck::bytes_of;
 use winit::dpi::PhysicalSize;
 use std::{sync::Arc, time::Duration};
 
@@ -37,7 +36,8 @@ use crate::{
         RendererRxBundle,
         RendererTelemetry,
         RendererToApp,
-    }, world::{ChunkAABBPtr, ChunkMetadata, ChunkState, Node},
+    },
+    world::{ChunkMetadata, ChunkState, Node},
 };
 use frames::{FrameManager, RenderTarget};
 use passes::Passes;
@@ -60,6 +60,7 @@ pub struct RendererState {
 
     // TODO(loader): remove this when chunk streaming is in
     staged_chunk: bool,
+    num_chunks: u32,
 }
 
 impl Drop for RendererState {
@@ -107,6 +108,7 @@ impl Worker for Renderer {
             ctx,
 
             staged_chunk: false,
+            num_chunks: 0,
         })
     }
 
@@ -136,9 +138,15 @@ impl Worker for Renderer {
         // TODO(loader): remove this when chunk streaming is in
         if !this.staged_chunk {
             this.staged_chunk = true;
+            this.num_chunks = 2;
 
             let node = Node::new().with_child_mask(0).with_mat_id(1);
-            let chunk_meta = ChunkMetadata::new().with_state(ChunkState::Loaded);
+
+            let root = this.resources.voxel_data.bda;
+            let meta = ChunkMetadata::new().with_state(ChunkState::Loaded);
+
+            let roots_slice = [root, root];
+            let meta_slice = [meta, meta.with_x(1).with_y(1).with_z(1)];
 
             unsafe {
                 this.ctx.dev.cmd_copy_buffer(
@@ -148,18 +156,16 @@ impl Worker for Renderer {
                     &[target.arena.stage(&node).get_buf_copy(0)],
                 );
 
-                let roots_src = target.arena.stage(&this.resources.voxel_data.bda);
-                let meta_src = target.arena.stage(&chunk_meta);
-                let aabb_src = target.arena.stage(&ChunkAABBPtr::new());
+                let roots_stage = target.arena.stage_slice(&roots_slice);
+                let meta_stage = target.arena.stage_slice(&meta_slice);
 
                 this.ctx.dev.cmd_copy_buffer(
                     target.cmd,
                     target.arena.buf,
                     this.resources.chunk_headers.buf(),
                     &[
-                        this.resources.chunk_headers.roots.copy_from(&roots_src),
-                        this.resources.chunk_headers.metadata.copy_from(&meta_src),
-                        this.resources.chunk_headers.aabb_ptrs.copy_from(&aabb_src),
+                        this.resources.chunk_headers.roots.copy_from(&roots_stage),
+                        this.resources.chunk_headers.metadata.copy_from(&meta_stage),
                     ],
                 );
             }
@@ -167,7 +173,7 @@ impl Worker for Renderer {
 
         unsafe {
             this.passes.execute(&this.ctx, &mut FrameCtx {
-                resources: this.resources.view(&mut target),
+                resources: this.resources.view(&mut target, this.num_chunks),
                 in_flight: target,
                 frame_idx: tick.n,
                 time: tick.since_wake.as_secs_f64(),

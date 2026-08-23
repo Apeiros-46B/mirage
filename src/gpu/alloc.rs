@@ -294,6 +294,10 @@ impl GPUArena {
     pub fn stage<T: bytemuck::NoUninit>(&mut self, obj: &T) -> StagingSlice {
         self.stage_raw(bytemuck::bytes_of(obj))
     }
+
+    pub fn stage_slice<T: bytemuck::NoUninit>(&mut self, obj: &[T]) -> StagingSlice {
+        self.stage_raw(bytemuck::cast_slice(obj))
+    }
 }
 
 impl Drop for GPUArena {

@@ -1,16 +1,20 @@
 import shared.camera;
+import shared.world;
 
 struct PushConstants {
 	CameraState* camera;
-	uint64_t aabbPoolsBda[4]; // indexed by LOD level
-	uint64_t aabbPtrsBda;
+	// TODO: chunkmetadata buf is not guaranteed to be contiguous, eventually
+	// need some kind of collect/cull pass which builds a drawlist for us. can
+	// leave it like this when we're still manually loading chunks without a
+	// streaming system though.
+	ChunkMetadata* chunks;
 };
 
 [[vk::push_constant]]
 ConstantBuffer<PushConstants> push;
 
 [shader("vertex")]
-float4 vsh(uint vertexID : SV_VertexID) : SV_Position {
+float4 vsh(uint vertexID: SV_VertexID, uint chunkID: SV_InstanceID) : SV_Position {
 	const float3 CORNERS[8] = {
 		float3(0, 0, 0), float3(1, 0, 0), float3(1, 1, 0), float3(0, 1, 0),
 		float3(0, 0, 1), float3(1, 0, 1), float3(1, 1, 1), float3(0, 1, 1)
@@ -26,16 +30,21 @@ float4 vsh(uint vertexID : SV_VertexID) : SV_Position {
 		4, 0, 3, 4, 3, 7  // left (-X)
 	};
 
-	float3 localPos = CORNERS[INDICES[vertexID]];
-	localPos *= 256.0; // chunk scale
+	ChunkMetadata meta = push.chunks[chunkID];
 
-	// do real world position later
-	float3 worldPos = localPos + float3(0.0, 0.0, 0.0);
+	float3 chunkLocalPos = CORNERS[INDICES[vertexID]];
+	float3 realmLocalPos = float3(
+		float(meta.x),
+		float(meta.y),
+		float(meta.z),
+	);
+	float3 worldPos = (chunkLocalPos + realmLocalPos) * 256.0;
+
 	return mul(push.camera.viewProj, float4(worldPos, 1.0));
 }
 
 [shader("fragment")]
 [earlydepthstencil]
 void fsh() {
-	// dummy shader, some platforms (Windows) don't like it when you don't have fsh
+	// dummy shader, some platforms (Windows+nvidia) crash without a bound fsh
 }

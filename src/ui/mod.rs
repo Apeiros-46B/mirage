@@ -97,11 +97,11 @@ fn sparkline(ui: &mut Ui, id: &str, hist: &HistoryRing<f32>, budget: Option<f32>
 
     let data = Line::new(id, points)
         .color(Color32::from_rgb(100, 200, 100))
-        .width(1.5);
+        .width(1.5_f32);
 
     let sweep = VLine::new(id, hist.head as f64)
         .color(Color32::from_rgba_unmultiplied(255, 0, 0, 200))
-        .width(2.0);
+        .width(2.0_f32);
 
     Plot::new(id)
         .height(35.0)
@@ -119,7 +119,7 @@ fn sparkline(ui: &mut Ui, id: &str, hist: &HistoryRing<f32>, budget: Option<f32>
             if let Some(b) = budget {
                 plot.hline(HLine::new("budget", b as f64)
                     .color(Color32::from_rgb(220, 80, 80))
-                    .width(1.0));
+                    .width(1.0_f32));
             }
             plot.line(data);
             plot.vline(sweep);

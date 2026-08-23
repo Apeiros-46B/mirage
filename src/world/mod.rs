@@ -30,28 +30,6 @@ pub struct ChunkMetadata {
     pub state: ChunkState,
 }
 
-#[bitfield(bits = 32)]
-#[derive(Debug, Clone, Copy, NoUninit)]
-#[repr(C)]
-pub struct ChunkAABBPtr {
-    // offset within the pool for this AABB's LOD
-    pub ofs: B30,
-    pub lod: B2,
-}
-
-// LOD and chunk ID are implied by storage
-// stored in per-LOD pools, pointed to by chunk-specific ChunkAABBPtr
-#[bitfield(bits = 32)]
-#[derive(Debug, Clone, Copy, NoUninit)]
-#[repr(C)]
-pub struct ChunkAABB {
-    pub x: B8,
-    pub y: B8,
-    pub z: B8,
-
-    pad: B8,
-}
-
 #[bitfield(bits = 128)]
 #[derive(Debug, Clone, Copy, NoUninit)]
 #[repr(C)]

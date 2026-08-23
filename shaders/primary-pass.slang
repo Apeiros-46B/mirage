@@ -6,7 +6,6 @@ struct PushConstants {
 	uint64_t voxelDataBda;
 	uint64_t chunkRootsBda;
 	uint64_t chunkMetadataBda;
-	uint64_t chunkAabbPtrsBda;
 	uint32_t depthIdx;
 	uint32_t visbufIdx;
 	uint32_t extentX;

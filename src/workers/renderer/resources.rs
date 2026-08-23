@@ -16,7 +16,7 @@ use crate::{
         msgs::CameraState,
         renderer::frames::{PerFrame, RenderTarget},
     },
-    world::{CHUNK_WS_N, ChunkAABBPtr, ChunkMetadata},
+    world::{CHUNK_WS_N, ChunkMetadata},
 };
 
 pub struct ChunkHeaders {
@@ -24,9 +24,8 @@ pub struct ChunkHeaders {
     data: AllocatedMegabuffer,
 
     // views, each parallel array allocated contiguously
-    pub roots: AllocatedMegabuffer, // hot, accessed by raymarcher
-    pub metadata: AllocatedMegabuffer, // cold
-    pub aabb_ptrs: AllocatedMegabuffer, // hot, accessed by rasterizer
+    pub roots: AllocatedMegabuffer, // accessed by primary pass
+    pub metadata: AllocatedMegabuffer, // accessed by depth prepass
 }
 
 impl Destroy for ChunkHeaders {
@@ -39,19 +38,17 @@ impl ChunkHeaders {
     fn new(ctx: &VulkanCtx) -> Result<Self> {
         let roots_sz = (CHUNK_WS_N * size_of::<u64>()) as u64;
         let metadata_sz = (CHUNK_WS_N * size_of::<ChunkMetadata>()) as u64;
-        let aabb_ptrs_sz = (CHUNK_WS_N * size_of::<ChunkAABBPtr>()) as u64;
 
         let data = AllocatedMegabuffer::new_alloc(
             &ctx,
-            roots_sz + metadata_sz + aabb_ptrs_sz,
+            roots_sz + metadata_sz,
             c"chunk_headers",
         )?;
 
         unsafe {
             let roots = data.view(0, roots_sz);
             let metadata = data.view(roots_sz, metadata_sz);
-            let aabb_ptrs = data.view(roots_sz + metadata_sz, aabb_ptrs_sz);
-            Ok(Self { data, roots, metadata, aabb_ptrs })
+            Ok(Self { data, roots, metadata })
         }
     }
 
@@ -154,7 +151,7 @@ impl Resources {
         Ok(())
     }
 
-    pub fn view(&mut self, target: &mut RenderTarget<'_>) -> ResourceView<'_> {
+    pub fn view(&mut self, target: &mut RenderTarget<'_>, num_chunks: u32) -> ResourceView<'_> {
         let mut camera_buf = target.arena.alloc_scratch::<CameraState>();
         camera_buf.write(self.camera_rx.read());
 
@@ -164,7 +161,7 @@ impl Resources {
             voxel_data_bda: self.voxel_data.bda,
             chunk_roots_bda: self.chunk_headers.roots.bda,
             chunk_metadata_bda: self.chunk_headers.metadata.bda,
-            chunk_aabb_ptrs_bda: self.chunk_headers.aabb_ptrs.bda,
+            num_chunks,
 
             depth: &self.depth[target.idx],
             depth_idx: self.depth_idxs[target.idx],
@@ -184,7 +181,7 @@ pub struct ResourceView<'a> {
     pub voxel_data_bda: u64,
     pub chunk_roots_bda: u64,
     pub chunk_metadata_bda: u64,
-    pub chunk_aabb_ptrs_bda: u64,
+    pub num_chunks: u32,
 
     // per frame
     pub depth: &'a AllocatedImage,
