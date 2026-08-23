@@ -82,9 +82,14 @@ impl DepthPrepass {
             .depth_write_enable(true)
             .depth_compare_op(vk::CompareOp::LESS);
 
-        let col_blend_ci = vk::PipelineColorBlendStateCreateInfo::default();
-
+        // chunk IDs, single-channel r32uint + no interpolation
+        let col_blend_atmt_state = vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::R)
+            .blend_enable(false);
+        let col_blend_ci = vk::PipelineColorBlendStateCreateInfo::default()
+            .attachments(std::slice::from_ref(&col_blend_atmt_state));
         let mut rendering_ci = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&[vk::Format::R32_UINT])
             .depth_attachment_format(vk::Format::D32_SFLOAT);
 
         let pipeline_ci = vk::GraphicsPipelineCreateInfo::default()
@@ -126,7 +131,6 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
     ) -> Result<()> {
         let cmd = frame.in_flight.cmd;
 
-        // render depth only, cleared to 1.0
         let depth_atmt = vk::RenderingAttachmentInfo::default()
             .image_view(frame.resources.depth.view)
             .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
@@ -136,12 +140,25 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
                 depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 },
             });
 
+        let col_atmt = vk::RenderingAttachmentInfo::default()
+            .image_view(frame.resources.chunk_id.view)
+            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .clear_value(vk::ClearValue {
+                color: vk::ClearColorValue {
+                    uint32: [u32::MAX, 0, 0, 0], // clear to no chunk
+                },
+            });
+        let col_atmts = [col_atmt];
+
         let rendering_info = vk::RenderingInfo::default()
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: frame.in_flight.img.extent,
             })
             .layer_count(1)
+            .color_attachments(&col_atmts)
             .depth_attachment(&depth_atmt);
 
         unsafe {

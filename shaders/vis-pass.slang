@@ -11,7 +11,7 @@ ConstantBuffer<PushConstants> push;
 [[vk::binding(2, 0)]] RWTexture2D<uint64_t> visbufTextures[];
 [[vk::binding(2, 0)]] RWTexture2D<float4> colorTextures[];
 
-#define DEBUG_COLOR
+// #define DEBUG_COLOR
 
 float3 id_to_color(uint64_t v) {
 	// no voxel hit

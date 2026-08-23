@@ -7,15 +7,18 @@ struct PushConstants {
 	uint64_t chunkRootsBda;
 	uint64_t chunkMetadataBda;
 	uint32_t depthIdx;
+	uint32_t chunkIdIdx;
 	uint32_t visbufIdx;
 	uint32_t extentX;
 	uint32_t extentY;
+	uint32_t _pad;
 };
 
 [[vk::push_constant]]
 ConstantBuffer<PushConstants> push;
 
 [[vk::binding(1, 0)]] Texture2D<float> depthTextures[];
+[[vk::binding(1, 0)]] Texture2D<uint> chunkIdTextures[];
 [[vk::binding(2, 0)]] RWTexture2D<uint64_t> visbufTextures[];
 
 [shader("compute")]
@@ -26,9 +29,11 @@ void main(uint3 threadId : SV_DispatchThreadID) {
 	}
 
 	Texture2D<float> depthTex = depthTextures[push.depthIdx];
+	Texture2D<uint> chunkIdTex = chunkIdTextures[push.chunkIdIdx];
 	RWTexture2D<uint64_t> visbufTex = visbufTextures[push.visbufIdx];
 
 	float rawDepth = depthTex.Load(threadId);
+	uint chunkId = chunkIdTex.Load(threadId);
 
 	if (rawDepth == 1.0) {
 		// guaranteed no hit, there is no chunk on that pixel
@@ -39,17 +44,19 @@ void main(uint3 threadId : SV_DispatchThreadID) {
 		Ray primary = push.camera.primaryRay(uv);
 		Ray start = primary.advanced(depth + 0.001);
 
-		// TODO: trace rays to get actual voxel ID
-		// this is just temporary for debugging ray hit pos
-		int x = int(floor(start.pos.x + 0.0001)) % 16;
-		int y = int(floor(start.pos.y + 0.0001)) % 16;
-		int z = int(floor(start.pos.z + 0.0001)) % 16;
+		// // TODO: trace rays to get actual voxel ID
+		// // this is just temporary for debugging ray hit pos
+		// int x = int(floor(start.pos.x + 0.0001)) % 16;
+		// int y = int(floor(start.pos.y + 0.0001)) % 16;
+		// int z = int(floor(start.pos.z + 0.0001)) % 16;
+		//
+		// uint64_t v = 0;
+		// v |= (uint64_t(x) & 0xFF);
+		// v |= (uint64_t(y) & 0xFF) << 8;
+		// v |= (uint64_t(z) & 0xFF) << 16;
+		//
+		// visbufTex.Store(threadId.xy, v);
 
-		uint64_t v = 0;
-		v |= (uint64_t(x) & 0xFF);
-		v |= (uint64_t(y) & 0xFF) << 8;
-		v |= (uint64_t(z) & 0xFF) << 16;
-
-		visbufTex.Store(threadId.xy, v);
+		visbufTex.Store(threadId.xy, chunkId);
 	}
 }

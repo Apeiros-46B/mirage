@@ -62,6 +62,8 @@ pub struct Resources {
 
     depth: PerFrame<AllocatedImage>,
     depth_idxs: PerFrame<u32>,
+    chunk_id: PerFrame<AllocatedImage>,
+    chunk_id_idxs: PerFrame<u32>,
     color: PerFrame<AllocatedImage>,
     color_idxs: PerFrame<u32>,
     visbuf: PerFrame<AllocatedImage>,
@@ -80,6 +82,7 @@ impl Destroy for Resources {
             self.voxel_data.destroy(ctx);
 
             self.depth.destroy(ctx);
+            self.chunk_id.destroy(ctx);
             self.color.destroy(ctx);
             self.visbuf.destroy(ctx);
 
@@ -97,6 +100,7 @@ impl Resources {
         let extent = vk::Extent2D { width: scr_sz.width, height: scr_sz.height };
 
         let depth = make_depth_targets(&ctx, extent)?;
+        let chunk_id = make_chunk_id_targets(&ctx, extent)?;
         let color = make_color_targets(&ctx, extent)?;
         let visbuf = make_visbuf_targets(&ctx, extent)?;
 
@@ -109,6 +113,7 @@ impl Resources {
 
         let mut desc = DescriptorAllocator::new(ctx)?;
         let depth_idxs = desc.alloc_sampled_imgs(&depth).into();
+        let chunk_id_idxs = desc.alloc_sampled_imgs(&chunk_id).into();
         let color_idxs = desc.alloc_storage_imgs(&color).into();
         let visbuf_idxs = desc.alloc_storage_imgs(&visbuf).into();
 
@@ -117,6 +122,8 @@ impl Resources {
 
             depth,
             depth_idxs,
+            chunk_id,
+            chunk_id_idxs,
             color,
             color_idxs,
             visbuf,
@@ -138,6 +145,10 @@ impl Resources {
             self.depth.destroy(ctx);
             self.depth = make_depth_targets(ctx, extent)?;
             self.desc.update_sampled_imgs(self.depth_idxs[0], &self.depth);
+
+            self.chunk_id.destroy(ctx);
+            self.chunk_id = make_chunk_id_targets(ctx, extent)?;
+            self.desc.update_sampled_imgs(self.chunk_id_idxs[0], &self.depth);
 
             self.color.destroy(ctx);
             self.color = make_color_targets(ctx, extent)?;
@@ -165,6 +176,8 @@ impl Resources {
 
             depth: &self.depth[target.idx],
             depth_idx: self.depth_idxs[target.idx],
+            chunk_id: &self.chunk_id[target.idx],
+            chunk_id_idx: self.chunk_id_idxs[target.idx],
             color: &self.color[target.idx],
             color_idx: self.color_idxs[target.idx],
             visbuf: &self.visbuf[target.idx],
@@ -186,6 +199,8 @@ pub struct ResourceView<'a> {
     // per frame
     pub depth: &'a AllocatedImage,
     pub depth_idx: u32,
+    pub chunk_id: &'a AllocatedImage,
+    pub chunk_id_idx: u32,
     pub visbuf: &'a AllocatedImage,
     pub visbuf_idx: u32,
     pub color: &'a AllocatedImage,
@@ -197,6 +212,12 @@ impl<'a, 'b> ResourceView<'a> {
         vk::ImageMemoryBarrier2::default()
             .image(self.depth.img)
             .subresource_range(DEPTH_SUBRES_RANGE)
+    }
+
+    pub fn chunk_id_barrier(&self) -> vk::ImageMemoryBarrier2<'b> {
+        vk::ImageMemoryBarrier2::default()
+            .image(self.chunk_id.img)
+            .subresource_range(COLOR_SUBRES_RANGE)
     }
 
     pub fn color_barrier(&self) -> vk::ImageMemoryBarrier2<'b> {
@@ -220,6 +241,14 @@ const DEPTH_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange 
     layer_count: 1,
 };
 
+const COLOR_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
+    aspect_mask: vk::ImageAspectFlags::COLOR,
+    base_mip_level: 0,
+    level_count: 1,
+    base_array_layer: 0,
+    layer_count: 1,
+};
+
 fn make_depth_targets(
     ctx: &VulkanCtx,
     extent: vk::Extent2D,
@@ -236,13 +265,21 @@ fn make_depth_targets(
     })
 }
 
-const COLOR_SUBRES_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
-    aspect_mask: vk::ImageAspectFlags::COLOR,
-    base_mip_level: 0,
-    level_count: 1,
-    base_array_layer: 0,
-    layer_count: 1,
-};
+fn make_chunk_id_targets(
+    ctx: &VulkanCtx,
+    extent: vk::Extent2D,
+) -> Result<PerFrame<AllocatedImage>> {
+    PerFrame::try_init(|_| {
+        AllocatedImage::new(
+            ctx,
+            extent.into(),
+            vk::Format::R32_UINT,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            COLOR_SUBRES_RANGE,
+            c"chunk ID target",
+        )
+    })
+}
 
 fn make_color_targets(
     ctx: &VulkanCtx,

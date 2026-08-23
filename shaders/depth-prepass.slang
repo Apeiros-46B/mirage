@@ -10,11 +10,16 @@ struct PushConstants {
 	ChunkMetadata* chunks;
 };
 
+struct VertexOutput {
+	float4 pos : SV_Position;
+	nointerpolation uint chunkId : CHUNK_ID;
+};
+
 [[vk::push_constant]]
 ConstantBuffer<PushConstants> push;
 
 [shader("vertex")]
-float4 vsh(uint vertexID: SV_VertexID, uint chunkID: SV_InstanceID) : SV_Position {
+VertexOutput vsh(uint vertId : SV_VertexID, uint chunkId : SV_InstanceID) {
 	const float3 CORNERS[8] = {
 		float3(0, 0, 0), float3(1, 0, 0), float3(1, 1, 0), float3(0, 1, 0),
 		float3(0, 0, 1), float3(1, 0, 1), float3(1, 1, 1), float3(0, 1, 1)
@@ -30,9 +35,9 @@ float4 vsh(uint vertexID: SV_VertexID, uint chunkID: SV_InstanceID) : SV_Positio
 		4, 0, 3, 4, 3, 7  // left (-X)
 	};
 
-	ChunkMetadata meta = push.chunks[chunkID];
+	ChunkMetadata meta = push.chunks[chunkId];
 
-	float3 chunkLocalPos = CORNERS[INDICES[vertexID]];
+	float3 chunkLocalPos = CORNERS[INDICES[vertId]];
 	float3 realmLocalPos = float3(
 		float(meta.x),
 		float(meta.y),
@@ -40,11 +45,15 @@ float4 vsh(uint vertexID: SV_VertexID, uint chunkID: SV_InstanceID) : SV_Positio
 	);
 	float3 worldPos = (chunkLocalPos + realmLocalPos) * 256.0;
 
-	return mul(push.camera.viewProj, float4(worldPos, 1.0));
+	VertexOutput out;
+	out.pos = mul(push.camera.viewProj, float4(worldPos, 1.0));
+	out.chunkId = chunkId;
+	return out;
 }
 
+// just return the chunk ID to the render target
 [shader("fragment")]
 [earlydepthstencil]
-void fsh() {
-	// dummy shader, some platforms (Windows+nvidia) crash without a bound fsh
+uint fsh(VertexOutput in) : SV_Target0 {
+	return in.chunkId;
 }

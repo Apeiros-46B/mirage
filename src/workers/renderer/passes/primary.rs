@@ -27,9 +27,11 @@ struct PushConstants {
     chunk_roots_bda: u64,
     chunk_metadata_bda: u64,
     depth_idx: u32,
+    chunk_id_idx: u32,
     visbuf_idx: u32,
     extent_x: u32,
     extent_y: u32,
+    _pad: u32,
 }
 
 impl Destroy for PrimaryPass {
@@ -126,9 +128,11 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
                     chunk_roots_bda: frame.resources.chunk_roots_bda,
                     chunk_metadata_bda: frame.resources.chunk_metadata_bda,
                     depth_idx: frame.resources.depth_idx,
+                    chunk_id_idx: frame.resources.chunk_id_idx,
                     visbuf_idx: frame.resources.visbuf_idx,
                     extent_x: frame.resources.color.extent.width,
                     extent_y: frame.resources.color.extent.height,
+                    _pad: 0,
                 }),
             );
 

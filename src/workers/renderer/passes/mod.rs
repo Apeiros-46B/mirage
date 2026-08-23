@@ -95,8 +95,14 @@ impl Task<FrameCtx<'_>> for Passes {
                 | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
                 vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
             );
+        let mut chunk_id_barrier = frame.resources.chunk_id_barrier()
+            .begin(
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            );
         unsafe {
-            ctx.barrier(cmd, [depth_barrier]);
+            ctx.barrier(cmd, [depth_barrier, chunk_id_barrier]);
             self.depth_prepass.execute(&ctx, frame)?;
         }
 
@@ -111,8 +117,13 @@ impl Task<FrameCtx<'_>> for Passes {
             vk::PipelineStageFlags2::COMPUTE_SHADER,
             vk::AccessFlags2::SHADER_SAMPLED_READ,
         );
+        chunk_id_barrier.transition(
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_SAMPLED_READ,
+        );
         unsafe {
-            ctx.barrier(cmd, [visbuf_barrier, depth_barrier]);
+            ctx.barrier(cmd, [visbuf_barrier, depth_barrier, chunk_id_barrier]);
             self.primary_pass.execute(&ctx, frame)?;
         }
 
@@ -123,7 +134,7 @@ impl Task<FrameCtx<'_>> for Passes {
                 vk::AccessFlags2::SHADER_WRITE,
             );
         visbuf_barrier.transition(
-            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             vk::PipelineStageFlags2::COMPUTE_SHADER,
             vk::AccessFlags2::SHADER_READ,
         );
