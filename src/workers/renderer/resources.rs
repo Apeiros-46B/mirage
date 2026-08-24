@@ -148,7 +148,7 @@ impl Resources {
 
             self.chunk_id.destroy(ctx);
             self.chunk_id = make_chunk_id_targets(ctx, extent)?;
-            self.desc.update_sampled_imgs(self.chunk_id_idxs[0], &self.depth);
+            self.desc.update_sampled_imgs(self.chunk_id_idxs[0], &self.chunk_id);
 
             self.color.destroy(ctx);
             self.color = make_color_targets(ctx, extent)?;
