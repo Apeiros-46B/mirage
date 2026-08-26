@@ -122,4 +122,31 @@ struct VisbufKey {
 		get { return uint(bitfieldExtract(data, 48, 16)); }
 		set { data = bitfieldInsert(data, uint64_t(newValue), 48, 16); }
 	}
+
+	// TODO: linux nvidia crashes when compiling inlined property accessors
+	[mutating]
+	void clear() {
+		data = 0;
+	}
+	[mutating]
+	void write(float3 pos, uint face, uint matId) {
+		uint3 voxel = bit_cast<uint3>(pos) >> 15 & 0xFFu;
+		data = uint64_t(face) << 1
+		     | uint64_t(voxel.x) << 4
+		     | uint64_t(voxel.y) << 12
+		     | uint64_t(voxel.z) << 20
+		     | uint64_t(matId) << 48;
+	}
+	bool isHit() {
+		return uint(data >> 48) != 0;
+	}
+}
+
+void writeVisbufKey(float3 pos, uint face, uint matId, out VisbufKey key) {
+	uint3 voxel = bit_cast<uint3>(pos) >> 15 & 0xFFu;
+	key.data = uint64_t(face) << 1
+	         | uint64_t(voxel.x) << 4
+	         | uint64_t(voxel.y) << 12
+	         | uint64_t(voxel.z) << 20
+	         | uint64_t(matId) << 48;
 }

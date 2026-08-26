@@ -20,7 +20,6 @@ ConstantBuffer<PushConstants> push;
 [[vk::binding(1, 0)]] Texture2D<uint> chunkIdTextures[];
 [[vk::binding(2, 0)]] RWTexture2D<uint64_t> visbufTextures[];
 
-static const uint64_t NO_VOXEL = 0xFFFFFFFFFFFFFFFF;
 static const float MIN_RAY_DIR = 1e-30;
 
 uint countBitsBefore(uint64_t mask, uint bitIdx) {
@@ -46,14 +45,35 @@ float3 floorToScale(float3 pos, int scaleExp) {
 	return bit_cast<float3>(bit_cast<uint3>(pos) & mask);
 }
 
-uint64_t packVoxelPos(float3 pos) {
-	uint3 voxel = bit_cast<uint3>(pos) >> 15 & 0xFFu;
-	return uint64_t(voxel.x)
-	     | uint64_t(voxel.y) << 8
-	     | uint64_t(voxel.z) << 16;
+uint faceOpposingRay(float3 dir) {
+	float3 absDir = abs(dir);
+
+	if (absDir.x >= absDir.y && absDir.x >= absDir.z) {
+		return dir.x >= 0.0 ? uint(Face.NX) : uint(Face.PX);
+	}
+	if (absDir.y >= absDir.z) {
+		return dir.y >= 0.0 ? uint(Face.NY) : uint(Face.PY);
+	}
+	return dir.z >= 0.0 ? uint(Face.NZ) : uint(Face.PZ);
 }
 
-uint64_t traceTree(Node* nodes, float3 origin, float3 dir) {
+uint faceCrossed(float3 distSide, float3 dir) {
+	if (distSide.x <= distSide.y && distSide.x <= distSide.z) {
+		return dir.x >= 0.0 ? uint(Face.NX) : uint(Face.PX);
+	}
+	if (distSide.y <= distSide.z) {
+		return dir.y >= 0.0 ? uint(Face.NY) : uint(Face.PY);
+	}
+	return dir.z >= 0.0 ? uint(Face.NZ) : uint(Face.PZ);
+}
+
+void traceTree(
+	Node* nodes,
+	float3 origin,
+	float3 dir,
+	uint entryFace,
+	out VisbufKey key,
+) {
 	uint stack[11]; // TODO: groupshared stack causes segfault on linux nvidia
 	int scaleExp = 21; // 0.25
 
@@ -66,6 +86,7 @@ uint64_t traceTree(Node* nodes, float3 origin, float3 dir) {
 
 	float3 invDir = 1.0 / dir;
 	float3 pos = clamp(origin, 1.0, 1.9999999);
+	uint hitFace = entryFace;
 
 	// TODO: 512?
 	[loop]
@@ -81,8 +102,8 @@ uint64_t traceTree(Node* nodes, float3 origin, float3 dir) {
 		}
 
 		if (node.isLeaf && ((node.childMask >> childIdx) & 1) != 0) {
-			// TODO: return actual ID, this is just a placeholder
-			return packVoxelPos(pos);
+			key.write(pos, hitFace, node.matId);
+			return;
 		}
 
 		int advanceScaleExp = scaleExp;
@@ -95,6 +116,7 @@ uint64_t traceTree(Node* nodes, float3 origin, float3 dir) {
 		float scale = bit_cast<float>((advanceScaleExp - 23 + 127) << 23);
 		float3 distSide = (step(0.0, dir) * scale + (pos - origin)) * invDir;
 		float tmax = min(min(distSide.x, distSide.y), distSide.z);
+		hitFace = faceCrossed(distSide, dir);
 
 		float3 siblingMin = select(
 			tmax == distSide,
@@ -111,7 +133,10 @@ uint64_t traceTree(Node* nodes, float3 origin, float3 dir) {
 		if ((diffExp & 1) == 0) diffExp--;
 
 		if (diffExp > scaleExp) {
-			if (diffExp > 21) return NO_VOXEL;
+			if (diffExp > 21) {
+				key.clear();
+				return;
+			}
 
 			scaleExp = diffExp;
 			nodeIdx = stack[scaleExp >> 1];
@@ -119,11 +144,11 @@ uint64_t traceTree(Node* nodes, float3 origin, float3 dir) {
 		}
 	}
 
-	return NO_VOXEL;
+	key.clear();
 }
 
-uint64_t traceChunk(Ray ray, uint chunk_id) {
-	ChunkMetadata meta = push.chunkMetadata[chunk_id];
+void traceChunk(Ray ray, uint chunkId, out VisbufKey key) {
+	ChunkMetadata meta = push.chunkMetadata[chunkId];
 	float3 chunkMin = float3(meta.x, meta.y, meta.z) * 256.0;
 	float3 chunkMax = chunkMin + 256.0;
 
@@ -139,30 +164,40 @@ uint64_t traceChunk(Ray ray, uint chunk_id) {
 	float3 planeNear = min(plane1, plane2);
 	float3 planeFar = max(plane1, plane2);
 
-	float distMin = max(max(max(planeNear.x, planeNear.y), planeNear.z), 0.0);
+	float distNear = max(max(planeNear.x, planeNear.y), planeNear.z);
+	float distMin = max(distNear, 0.0);
 	float distMax = min(min(planeFar.x, planeFar.y), planeFar.z);
-	if (distMax < distMin) return NO_VOXEL;
+	if (distMax < distMin) {
+		key.clear();
+		return;
+	}
 
 	float3 posEntry = ray.pos + ray.dir * distMin;
 	float3 posTree = (posEntry - chunkMin) / 256.0 + 1.0;
-	Node* nodes = push.chunkRoots[chunk_id];
+	Node* nodes = push.chunkRoots[chunkId];
+	uint entryFace = faceOpposingRay(ray.dir);
 
-	return traceTree(nodes, posTree, ray.dir);
+	if (distNear >= 0.0) {
+		entryFace = faceCrossed(-planeNear, ray.dir);
+	}
+
+	traceTree(nodes, posTree, ray.dir, entryFace, key);
+	if (key.isHit()) key.data |= uint64_t(chunkId) << 28;
 }
 
-uint64_t traceWorld(Ray ray, uint initial_chunk_id) {
-	uint chunk_id = initial_chunk_id;
+void traceWorld(Ray ray, uint initialChunkId, out VisbufKey key) {
+	uint chunkId = initialChunkId;
 
 	[loop]
-	for (uint chunk_step = 0; chunk_step < 1; chunk_step++) {
-		uint64_t voxel_id = traceChunk(ray, chunk_id);
-		if (voxel_id != NO_VOXEL) return voxel_id;
+	for (uint chunkStep = 0; chunkStep < 1; chunkStep++) {
+		traceChunk(ray, chunkId, key);
+		if (key.isHit()) return;
 
 		// TODO(world): select next chunk via top-level DDA
 		break;
 	}
 
-	return NO_VOXEL;
+	key.clear();
 }
 
 [shader("compute")]
@@ -174,13 +209,14 @@ void main(uint3 threadId : SV_DispatchThreadID) {
 
 	RWTexture2D<uint64_t> visbufTex = visbufTextures[push.visbufIdx];
 	uint chunkId = chunkIdTextures[push.chunkIdIdx].Load(threadId);
+	VisbufKey key;
+	key.clear();
 
-	if (chunkId == 0xFFFFFFFF) {
-		// guaranteed no hit, there is no chunk on that pixel
-		visbufTex.Store(threadId.xy, NO_VOXEL);
-	} else {
+	if (chunkId != 0xFFFFFFFF) {
 		float2 uv = (float2(threadId.xy) + 0.5) / float2(push.extentX, push.extentY);
 		Ray primary = push.camera.primaryRay(uv);
-		visbufTex.Store(threadId.xy, traceWorld(primary, chunkId));
+		traceWorld(primary, chunkId, key);
 	}
+
+	visbufTex.Store(threadId.xy, key.data);
 }
