@@ -28,7 +28,9 @@ const UP_DIR: Vec3 = Vec3::new(0.0, 1.0, 0.0);
 const BASE_SPEED: f32 = 50.0;
 const BASE_ROT_SPEED: f32 = 0.005;
 
-const DEFAULT_POS: Vec3 = Vec3::new(128.0, 128.0, 512.0);
+// const DEFAULT_POS: Vec3 = Vec3::new(128.0, 128.0, 512.0);
+// TODO(camera): imprecision
+const DEFAULT_POS: Vec3 = Vec3::new(1048576.0+128.0, 1048576.0+128.0, 1048576.0+512.0);
 const DEFAULT_YAW: f32 = -std::f32::consts::FRAC_PI_2; // facing -Z
 const DEFAULT_PITCH: f32 = 0.0;
 

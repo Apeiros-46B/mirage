@@ -155,7 +155,7 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
             .store_op(vk::AttachmentStoreOp::STORE)
             .clear_value(vk::ClearValue {
                 color: vk::ClearColorValue {
-                    uint32: [u32::MAX, 0, 0, 0], // clear to no chunk
+                    uint32: [0, 0, 0, 0], // chunk ID 0 means no chunk
                 },
             });
         let col_atmts = [col_atmt];

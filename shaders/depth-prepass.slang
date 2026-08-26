@@ -19,7 +19,7 @@ struct VertexOutput {
 ConstantBuffer<PushConstants> push;
 
 [shader("vertex")]
-VertexOutput vsh(uint vertId : SV_VertexID, uint chunkId : SV_InstanceID) {
+VertexOutput vsh(uint vertId : SV_VertexID, uint chunkIdx : SV_InstanceID) {
 	const float3 CORNERS[8] = {
 		float3(0, 0, 0), float3(1, 0, 0), float3(1, 1, 0), float3(0, 1, 0),
 		float3(0, 0, 1), float3(1, 0, 1), float3(1, 1, 1), float3(0, 1, 1)
@@ -35,6 +35,8 @@ VertexOutput vsh(uint vertId : SV_VertexID, uint chunkId : SV_InstanceID) {
 		4, 0, 3, 4, 3, 7  // left   (-X)
 	};
 
+	// chunk id 0 is reserved as a sentinel for "no chunk"
+	uint chunkId = chunkIdx + 1;
 	ChunkMetadata meta = push.chunks[chunkId];
 
 	float3 chunkMin = float3(float(meta.x), float(meta.y), float(meta.z)) * 256.0;

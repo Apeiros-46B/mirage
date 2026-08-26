@@ -1,15 +1,21 @@
 // see crate::world
 // TODO: Chunk layout can probably be made better. we do not need like 32*2^18 portals
-static const uint CHUNK_WS_N = 1 << 20;
-static const uint REALM_WS_N = 1 << 8;
+import raymarch;
+
+static const uint CHUNK_N = 1 << 20;
+static const uint REALM_N = 1 << 3;
 static const uint PORTALS_PER_CHUNK = 32;
 
+static const uint CHUNK_ID_MASK = (1 << 20) - 1;
+static const uint CHUNK_PAGE_ENTRIES = 16 * 16 * 16;
+
+// {{{ chunks
 // max 2 bits
 enum ChunkState : uint {
 	Empty = 0,
-	Loading = 1,
-	Solid = 2,
-	Loaded = 3,
+	Solid = 1, // loaded, all 6 faces are filled with opaque materials
+	Loaded = 2, // loaded
+	_Reserved = 3,
 }
 
 struct ChunkMetadata {
@@ -41,9 +47,9 @@ struct ChunkMetadata {
 		set { data = bitfieldInsert(data, uint64_t(newValue), 36, 18); }
 	}
 
-	// bits [54,61]: ephemeral (working-set) ID of the realm this chunk is in.
+	// bits [54,61]: ephemeral ID of the realm this chunk is in.
 	// theoretically allows 2^8 unique realms loaded at once
-	property uint realmWsId {
+	property uint realmId {
 		get { return uint(bitfieldExtract(data, 54, 8)); }
 		set { data = bitfieldInsert(data, uint64_t(newValue), 54, 8); }
 	}
@@ -74,79 +80,85 @@ struct Node {
 		set { payload = bitfieldInsert(payload, newValue, 0, 16); }
 	}
 }
+// }}}
 
-// TODO: this doesn't really count as world
-enum Face {
-	PX = 0b000,
-	PY = 0b001,
-	PZ = 0b010,
-	NX = 0b011,
-	NY = 0b100,
-	NZ = 0b101,
+// {{{ toplevel chunk map
+struct ChunkDirectory {
+	// pointer to buffer of pages, each page is 4096 uints representing a cube in space.
+	// L3 pages span the entire realm, L2 pages are 256^3 chunks, L1 pages are 16^3
+	//
+	// in L3 and L2 pages, each entry is an index into pages buffer, index `n` points
+	// to the whole page at pages[n * 4096] representing the next lvl (L3 -> L2 -> L1).
+	// in L1 pages, each uint's upper 2 bits are a ChunkState. the lower 20 bits are
+	// the nonzero chunk ID if ChunkState = Solid or Loaded. chunk ID 0 means no chunk
+	//
+	// each page consumes one 4-bit nibble from each unsigned 12-bit realm-local
+	// chunk coordinate. L3 uses bits [8, 11], L2 uses [4, 7], and L1 uses [0, 3].
+	// entries are Morton ordered in X-Z-Y order: for nibble bit b, X is stored at
+	// index bit 3b, Z at 3b + 1, and Y at 3b + 2. page 0 is reserved as the absent
+	// page, so every L3/L2 child index and realm root is either 0 or a page index
+	uint* pages;
 
-	SMOOTH = 0b111,
+	// indices into pages heap to L3 (root) pages, indexed by realm ID
+	uint* roots;
+
+	// returns 0-4095 morton idx for one page (XZY interleaved)
+	// - coord must be a >0 12-bit realm-local chunk coord
+	// - shift must be {8,4,0}, for L3,2,1 respectively
+	static uint _mortonNibble(int3 coord, uint shift) {
+		uint3 nibble = uint3(coord) >> shift & 0xFu;
+		uint index = 0;
+
+		[unroll]
+		for (uint bit = 0; bit < 4; bit++) {
+			index |= (nibble.x >> bit & 1) << (bit * 3);
+			index |= (nibble.z >> bit & 1) << (bit * 3 + 1);
+			index |= (nibble.y >> bit & 1) << (bit * 3 + 2);
+		}
+
+		return index;
+	}
+
+	uint _entAt(uint page, int3 coord, uint shift) {
+		return pages[page * CHUNK_PAGE_ENTRIES + _mortonNibble(coord, shift)];
+	}
+
+	// resolves the cell containing cur
+	// - cur.coord must be in [0, 4096) chunk cube of realm
+	// - cur.realmId must a valid realm id (<REALM_N)
+	// skipSide is the side of empty region safe to skip in one step from this cur:
+	// - 1 for an L1 entry
+	// - {4096,256,16} if missing L{3,2,1}
+	uint lookupChunk(ChunkCursor cur, out uint skipSide) {
+		uint page = roots[cur.realmId];
+		if (page == 0) {
+			skipSide = 4096;
+			return 0;
+		}
+
+		uint ent = _entAt(page, cur.coord, 8);
+		if (ent == 0) {
+			skipSide = 256;
+			return 0;
+		}
+
+		page = ent;
+		ent = _entAt(page, cur.coord, 4);
+		if (ent == 0) {
+			skipSide = 16;
+			return 0;
+		}
+
+		page = ent;
+		ent = _entAt(page, cur.coord, 0);
+		uint state = ent >> 30;
+		if (state == uint(ChunkState.Solid) || state == uint(ChunkState.Loaded)) {
+			skipSide = 1;
+			return ent & CHUNK_ID_MASK;
+		}
+
+		skipSide = 1;
+		return 0;
+	}
 }
-struct VisbufKey {
-	uint64_t data;
-
-	// true = per-voxel shading, false = per-face shading
-	property bool smooth {
-		get { return face == Face.SMOOTH; }
-	}
-
-	property bool entity {
-		get { return bitfieldExtract(data, 0, 1) != 0; }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 0, 1); }
-	}
-	property Face face {
-		get { return Face(bitfieldExtract(data, 1, 3)); }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 1, 3); }
-	}
-	property uint x {
-		get { return uint(bitfieldExtract(data, 4, 8)); }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 4, 8); }
-	}
-	property uint y {
-		get { return uint(bitfieldExtract(data, 12, 8)); }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 12, 8); }
-	}
-	property uint z {
-		get { return uint(bitfieldExtract(data, 20, 8)); }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 20, 8); }
-	}
-	property uint chunkId { // entity id when entity is true
-		get { return uint(bitfieldExtract(data, 28, 20)); }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 28, 20); }
-	}
-	property uint matId {
-		get { return uint(bitfieldExtract(data, 48, 16)); }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 48, 16); }
-	}
-
-	// TODO: linux nvidia crashes when compiling inlined property accessors
-	[mutating]
-	void clear() {
-		data = 0;
-	}
-	[mutating]
-	void write(float3 pos, uint face, uint matId) {
-		uint3 voxel = bit_cast<uint3>(pos) >> 15 & 0xFFu;
-		data = uint64_t(face) << 1
-		     | uint64_t(voxel.x) << 4
-		     | uint64_t(voxel.y) << 12
-		     | uint64_t(voxel.z) << 20
-		     | uint64_t(matId) << 48;
-	}
-	bool isHit() {
-		return uint(data >> 48) != 0;
-	}
-}
-
-void writeVisbufKey(float3 pos, uint face, uint matId, out VisbufKey key) {
-	uint3 voxel = bit_cast<uint3>(pos) >> 15 & 0xFFu;
-	key.data = uint64_t(face) << 1
-	         | uint64_t(voxel.x) << 4
-	         | uint64_t(voxel.y) << 12
-	         | uint64_t(voxel.z) << 20
-	         | uint64_t(matId) << 48;
-}
+// }}}

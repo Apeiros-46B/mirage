@@ -14,6 +14,7 @@ mod passes;
 mod resources;
 
 use anyhow::Result;
+use ash::vk;
 use winit::dpi::PhysicalSize;
 use std::{sync::Arc, time::Duration};
 
@@ -28,7 +29,7 @@ use crate::{
         RendererTelemetry,
         RendererToApp,
     },
-    world::{build_64_tree, build_occupancy_grid, ChunkMetadata, ChunkState},
+    world::BuiltWorld,
 };
 use frames::{FrameManager, RenderTarget};
 use passes::Passes;
@@ -50,7 +51,7 @@ pub struct RendererState {
     ctx: Arc<VulkanCtx>,
 
     // TODO(loader): remove this when chunk streaming is in
-    staged_chunk: bool,
+    pending_world: Option<BuiltWorld>,
     num_chunks: u32,
 }
 
@@ -87,7 +88,14 @@ impl Worker for Renderer {
         let ctx = init.ctx;
 
         let manager = FrameManager::new(ctx.clone(), init.sz)?;
-        let resources = Resources::new(ctx.clone(), init.sz, init.camera_rx)?;
+        let world = BuiltWorld::new();
+        let num_chunks = world.chunk_metadata.len() as u32 - 1;
+        let resources = Resources::new(
+            ctx.clone(),
+            init.sz,
+            init.camera_rx,
+            &world.chunk_directory,
+        )?;
         let passes = Passes::new(&ctx, &resources, manager.swapchain.fmt)?;
 
         Ok(RendererState {
@@ -98,8 +106,8 @@ impl Worker for Renderer {
             app_tx: init.app_tx,
             ctx,
 
-            staged_chunk: false,
-            num_chunks: 0,
+            pending_world: Some(world),
+            num_chunks,
         })
     }
 
@@ -127,29 +135,21 @@ impl Worker for Renderer {
         }
 
         // TODO(loader): remove this when chunk streaming is in
-        if !this.staged_chunk {
-            this.staged_chunk = true;
-
-            let grid = build_occupancy_grid(|x, y, z| {
-                let x = i32::from(x) - 128;
-                let y = i32::from(y) - 128;
-                let z = i32::from(z) - 128;
-                x * x + y * y + z * z < 128 * 128
-            });
-            let nodes = build_64_tree(&grid);
-
-            let root = this.resources.voxel_data.bda;
-            let meta = ChunkMetadata::new().with_state(ChunkState::Loaded);
-
-            let roots_slice = [root, root];
-            let meta_slice = [
-                meta.with_x(0).with_y(0).with_z(0),
-                meta.with_x(1).with_y(1).with_z(1),
-            ];
-            this.num_chunks = meta_slice.len() as u32;
+        if let Some(world) = this.pending_world.take() {
+            let roots = world.chunk_root_offsets
+                .iter()
+                .enumerate()
+                .map(|(chunk_id, offset)| {
+                    if chunk_id == 0 {
+                        0
+                    } else {
+                        this.resources.voxel_data.bda + *offset
+                    }
+                })
+                .collect::<Vec<_>>();
 
             unsafe {
-                let nodes_stage = target.arena.stage_slice(&nodes);
+                let nodes_stage = target.arena.stage_slice(&world.nodes);
 
                 this.ctx.dev.cmd_copy_buffer(
                     target.cmd,
@@ -158,8 +158,8 @@ impl Worker for Renderer {
                     &[this.resources.voxel_data.copy_from(&nodes_stage)],
                 );
 
-                let roots_stage = target.arena.stage_slice(&roots_slice);
-                let meta_stage = target.arena.stage_slice(&meta_slice);
+                let roots_stage = target.arena.stage_slice(&roots);
+                let meta_stage = target.arena.stage_slice(&world.chunk_metadata);
 
                 this.ctx.dev.cmd_copy_buffer(
                     target.cmd,
@@ -170,6 +170,35 @@ impl Worker for Renderer {
                         this.resources.chunk_headers.metadata.copy_from(&meta_stage),
                     ],
                 );
+
+                let pages_stage = target.arena.stage_slice(&world.chunk_directory.pages);
+                let directory_roots_stage =
+                    target.arena.stage_slice(&world.chunk_directory.roots);
+
+                this.ctx.dev.cmd_copy_buffer(
+                    target.cmd,
+                    target.arena.buf,
+                    this.resources.chunk_directory.buf(),
+                    &[
+                        this.resources.chunk_directory.pages.copy_from(&pages_stage),
+                        this.resources.chunk_directory.roots.copy_from(
+                            &directory_roots_stage,
+                        ),
+                    ],
+                );
+
+                let upload_barrier = vk::MemoryBarrier2::default()
+                    .src_stage_mask(vk::PipelineStageFlags2::COPY)
+                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .dst_stage_mask(
+                        vk::PipelineStageFlags2::VERTEX_SHADER
+                        | vk::PipelineStageFlags2::COMPUTE_SHADER,
+                    )
+                    .dst_access_mask(vk::AccessFlags2::SHADER_READ);
+                let upload_barriers = [upload_barrier];
+                let dependency = vk::DependencyInfo::default()
+                    .memory_barriers(&upload_barriers);
+                this.ctx.dev.cmd_pipeline_barrier2(target.cmd, &dependency);
             }
         }
 

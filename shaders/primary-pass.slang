@@ -1,12 +1,15 @@
 // based on https://dubiousconst282.github.io/2024/10/03/voxel-ray-tracing/
 // TODO: traversal is vibed
+// TODO: move more traversal stuff to shared.raymarch, need to reuse in for shading
 import shared.camera;
+import shared.raymarch;
 import shared.world;
 
 struct PushConstants {
 	CameraState* camera;
 	ChunkMetadata* chunkMetadata;
 	Node** chunkRoots;
+	ChunkDirectory chunkDirectory;
 
 	uint32_t chunkIdIdx;
 	uint32_t visbufIdx;
@@ -43,28 +46,6 @@ uint getCellIdx(float3 pos, int scaleExp) {
 float3 floorToScale(float3 pos, int scaleExp) {
 	uint mask = ~0u << scaleExp;
 	return bit_cast<float3>(bit_cast<uint3>(pos) & mask);
-}
-
-uint faceOpposingRay(float3 dir) {
-	float3 absDir = abs(dir);
-
-	if (absDir.x >= absDir.y && absDir.x >= absDir.z) {
-		return dir.x >= 0.0 ? uint(Face.NX) : uint(Face.PX);
-	}
-	if (absDir.y >= absDir.z) {
-		return dir.y >= 0.0 ? uint(Face.NY) : uint(Face.PY);
-	}
-	return dir.z >= 0.0 ? uint(Face.NZ) : uint(Face.PZ);
-}
-
-uint faceCrossed(float3 distSide, float3 dir) {
-	if (distSide.x <= distSide.y && distSide.x <= distSide.z) {
-		return dir.x >= 0.0 ? uint(Face.NX) : uint(Face.PX);
-	}
-	if (distSide.y <= distSide.z) {
-		return dir.y >= 0.0 ? uint(Face.NY) : uint(Face.PY);
-	}
-	return dir.z >= 0.0 ? uint(Face.NZ) : uint(Face.PZ);
 }
 
 void traceTree(
@@ -149,8 +130,8 @@ void traceTree(
 
 void traceChunk(Ray ray, uint chunkId, out VisbufKey key) {
 	ChunkMetadata meta = push.chunkMetadata[chunkId];
-	float3 chunkMin = float3(meta.x, meta.y, meta.z) * 256.0;
-	float3 chunkMax = chunkMin + 256.0;
+	float3 chunkMin = float3(meta.x, meta.y, meta.z) * CHUNK_VOXEL_SIDE;
+	float3 chunkMax = chunkMin + CHUNK_VOXEL_SIDE;
 
 	float3 safeDir = ray.dir;
 
@@ -173,7 +154,7 @@ void traceChunk(Ray ray, uint chunkId, out VisbufKey key) {
 	}
 
 	float3 posEntry = ray.pos + ray.dir * distMin;
-	float3 posTree = (posEntry - chunkMin) / 256.0 + 1.0;
+	float3 posTree = (posEntry - chunkMin) / CHUNK_VOXEL_SIDE + 1.0;
 	Node* nodes = push.chunkRoots[chunkId];
 	uint entryFace = faceOpposingRay(ray.dir);
 
@@ -185,16 +166,30 @@ void traceChunk(Ray ray, uint chunkId, out VisbufKey key) {
 	if (key.isHit()) key.data |= uint64_t(chunkId) << 28;
 }
 
-void traceWorld(Ray ray, uint initialChunkId, out VisbufKey key) {
-	uint chunkId = initialChunkId;
+void traceWorld(Ray ray, uint initChunkId, out VisbufKey key) {
+	ChunkMetadata initMeta = push.chunkMetadata[initChunkId];
+	ChunkCursor cur;
+	cur.coord = int3(initMeta.x, initMeta.y, initMeta.z);
+	cur.realmId = initMeta.realmId;
+
+	traceChunk(ray, initChunkId, key);
+	if (key.isHit()) return;
+	if (!cur.advance(ray, 1)) {
+		key.clear();
+		return;
+	}
 
 	[loop]
-	for (uint chunkStep = 0; chunkStep < 1; chunkStep++) {
-		traceChunk(ray, chunkId, key);
-		if (key.isHit()) return;
+	for (uint chunkStep = 0; chunkStep < 4096; chunkStep++) {
+		uint skipSide;
+		uint chunkId = push.chunkDirectory.lookupChunk(cur, skipSide);
 
-		// TODO(world): select next chunk via top-level DDA
-		break;
+		if (chunkId != 0) {
+			traceChunk(ray, chunkId, key);
+			if (key.isHit()) return;
+		}
+
+		if (!cur.advance(ray, skipSide)) break;
 	}
 
 	key.clear();
@@ -212,7 +207,7 @@ void main(uint3 threadId : SV_DispatchThreadID) {
 	VisbufKey key;
 	key.clear();
 
-	if (chunkId != 0xFFFFFFFF) {
+	if (chunkId != 0) {
 		float2 uv = (float2(threadId.xy) + 0.5) / float2(push.extentX, push.extentY);
 		Ray primary = push.camera.primaryRay(uv);
 		traceWorld(primary, chunkId, key);

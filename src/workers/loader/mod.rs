@@ -5,13 +5,9 @@
 // - send command buffer handles to the render thread to be dispatched (maybe fine if it's a separate queue, idk)
 // - on shutdown, receive message from main and join so that the Arc<Ctx> is dropped properly (same as renderer)
 
-use anyhow::Result;
 use std::sync::Arc;
 
-use crate::{
-    gpu::{alloc::GPUArena, ctx::{Destroy, VulkanCtx}, task::Task},
-    sync::{chan::SafeSend, worker::{MessageHandler, TickTiming, Worker}},
-};
+use crate::{gpu::{alloc::GPUArena, ctx::VulkanCtx}};
 
 pub struct LoaderInit {
     pub ctx: Arc<VulkanCtx>,

@@ -1,4 +1,5 @@
 import shared.world;
+import shared.raymarch;
 
 struct PushConstants {
 	uint32_t visbufIdx;
@@ -15,8 +16,9 @@ ConstantBuffer<PushConstants> push;
 
 // #define DEBUG_POSITION
 // #define DEBUG_POSITION_MOD
-// #define DEBUG_FACE
-#define DEBUG_MATERIAL
+#define DEBUG_FACE
+// #define DEBUG_MATERIAL
+// #define DEBUG_CHUNK
 
 float3 hashColor(uint state) {
 	uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
@@ -47,6 +49,8 @@ float3 keyToColor(VisbufKey key) {
 	return faceColor(key.face);
 #elif defined(DEBUG_MATERIAL)
 	return hashColor(key.matId);
+#elif defined(DEBUG_CHUNK)
+	return hashColor(key.chunkId);
 #else
 	return float3(1.0, 0.0, 1.0);
 #endif
