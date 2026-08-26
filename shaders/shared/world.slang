@@ -36,14 +36,14 @@ struct ChunkMetadata {
 	// bits [36,53]: index into portal megabuffer, points to a slice of N portals
 	// owned by this chunk, where N is determined at worldgen time and never needs
 	// to be read back. theoretically allows 2^18 * PORTALS_PER_CHUNK portals
-	property uint portal_heap_ofs {
+	property uint portalHeapOfs {
 		get { return uint(bitfieldExtract(data, 36, 18)); }
 		set { data = bitfieldInsert(data, uint64_t(newValue), 36, 18); }
 	}
 
 	// bits [54,61]: ephemeral (working-set) ID of the realm this chunk is in.
 	// theoretically allows 2^8 unique realms loaded at once
-	property uint realm_ws_id {
+	property uint realmWsId {
 		get { return uint(bitfieldExtract(data, 54, 8)); }
 		set { data = bitfieldInsert(data, uint64_t(newValue), 54, 8); }
 	}
@@ -55,53 +55,71 @@ struct ChunkMetadata {
 	}
 }
 
-// 128-bit, child_mask == 0 means leaf
-// if leaf, payload = mat_id and oct_normal
-// otherwise payload = child_ofs (index of 64-node slabs, not single nodes)
+// 128-bit, branch children are packed in child-mask order
+// payload bit 31 = leaf, leaf masks contain same-material occupied cells
 struct Node {
-	uint64_t child_mask;
+	uint64_t childMask;
 	uint32_t payload;
 	uint32_t pad;
 
-	property uint child_ofs {
-		get { return payload; }
-		set { payload = newValue; }
+	property bool isLeaf {
+		get { return (payload & 0x80000000) != 0; }
 	}
-	property uint mat_id {
+	property uint childOfs {
+		get { return payload & 0x7FFFFFFF; }
+		set { payload = newValue & 0x7FFFFFFF; }
+	}
+	property uint matId {
 		get { return bitfieldExtract(payload, 0, 16); }
 		set { payload = bitfieldInsert(payload, newValue, 0, 16); }
 	}
 }
 
+// TODO: this doesn't really count as world
+enum Face {
+	PX = 0b000,
+	PY = 0b001,
+	PZ = 0b010,
+	NX = 0b011,
+	NY = 0b100,
+	NZ = 0b101,
+
+	SMOOTH = 0b111,
+}
 struct VisbufKey {
 	uint64_t data;
 
-	property uint chunkId {
-		get { return uint(bitfieldExtract(data, 0, 20)); }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 0, 20); }
+	// true = per-voxel shading, false = per-face shading
+	property bool smooth {
+		get { return face == Face.SMOOTH; }
+	}
+
+	property bool entity {
+		get { return bitfieldExtract(data, 0, 1) != 0; }
+		set { data = bitfieldInsert(data, uint64_t(newValue), 0, 1); }
+	}
+	property Face face {
+		get { return Face(bitfieldExtract(data, 1, 3)); }
+		set { data = bitfieldInsert(data, uint64_t(newValue), 1, 3); }
 	}
 	property uint x {
+		get { return uint(bitfieldExtract(data, 4, 8)); }
+		set { data = bitfieldInsert(data, uint64_t(newValue), 4, 8); }
+	}
+	property uint y {
+		get { return uint(bitfieldExtract(data, 12, 8)); }
+		set { data = bitfieldInsert(data, uint64_t(newValue), 12, 8); }
+	}
+	property uint z {
 		get { return uint(bitfieldExtract(data, 20, 8)); }
 		set { data = bitfieldInsert(data, uint64_t(newValue), 20, 8); }
 	}
-	property uint y {
-		get { return uint(bitfieldExtract(data, 28, 8)); }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 28, 8); }
+	property uint chunkId { // entity id when entity is true
+		get { return uint(bitfieldExtract(data, 28, 20)); }
+		set { data = bitfieldInsert(data, uint64_t(newValue), 28, 20); }
 	}
-	property uint z {
-		get { return uint(bitfieldExtract(data, 36, 8)); }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 36, 8); }
-	}
-	property uint lod {
-		get { return uint(bitfieldExtract(data, 44, 2)); }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 44, 2); }
-	}
-	property uint face {
-		get { return uint(bitfieldExtract(data, 46, 3)); }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 46, 3); }
-	}
-	property uint matType {
-		get { return uint(bitfieldExtract(data, 49, 1)); }
-		set { data = bitfieldInsert(data, uint64_t(newValue), 49, 1); }
+	property uint matId {
+		get { return uint(bitfieldExtract(data, 48, 16)); }
+		set { data = bitfieldInsert(data, uint64_t(newValue), 48, 16); }
 	}
 }

@@ -61,7 +61,6 @@ pub struct Resources {
     pub desc: DescriptorAllocator,
 
     depth: PerFrame<AllocatedImage>,
-    depth_idxs: PerFrame<u32>,
     chunk_id: PerFrame<AllocatedImage>,
     chunk_id_idxs: PerFrame<u32>,
     color: PerFrame<AllocatedImage>,
@@ -112,7 +111,6 @@ impl Resources {
         let chunk_headers = ChunkHeaders::new(&ctx)?;
 
         let mut desc = DescriptorAllocator::new(ctx)?;
-        let depth_idxs = desc.alloc_sampled_imgs(&depth).into();
         let chunk_id_idxs = desc.alloc_sampled_imgs(&chunk_id).into();
         let color_idxs = desc.alloc_storage_imgs(&color).into();
         let visbuf_idxs = desc.alloc_storage_imgs(&visbuf).into();
@@ -121,7 +119,6 @@ impl Resources {
             desc,
 
             depth,
-            depth_idxs,
             chunk_id,
             chunk_id_idxs,
             color,
@@ -144,7 +141,6 @@ impl Resources {
         unsafe {
             self.depth.destroy(ctx);
             self.depth = make_depth_targets(ctx, extent)?;
-            self.desc.update_sampled_imgs(self.depth_idxs[0], &self.depth);
 
             self.chunk_id.destroy(ctx);
             self.chunk_id = make_chunk_id_targets(ctx, extent)?;
@@ -170,12 +166,11 @@ impl Resources {
             camera_bda: camera_buf.bda,
 
             voxel_data_bda: self.voxel_data.bda,
-            chunk_roots_bda: self.chunk_headers.roots.bda,
             chunk_metadata_bda: self.chunk_headers.metadata.bda,
+            chunk_roots_bda: self.chunk_headers.roots.bda,
             num_chunks,
 
             depth: &self.depth[target.idx],
-            depth_idx: self.depth_idxs[target.idx],
             chunk_id: &self.chunk_id[target.idx],
             chunk_id_idx: self.chunk_id_idxs[target.idx],
             color: &self.color[target.idx],
@@ -192,13 +187,12 @@ pub struct ResourceView<'a> {
 
     // world buffer BDAs (handles stay on Resources for staging)
     pub voxel_data_bda: u64,
-    pub chunk_roots_bda: u64,
     pub chunk_metadata_bda: u64,
+    pub chunk_roots_bda: u64,
     pub num_chunks: u32,
 
     // per frame
     pub depth: &'a AllocatedImage,
-    pub depth_idx: u32,
     pub chunk_id: &'a AllocatedImage,
     pub chunk_id_idx: u32,
     pub visbuf: &'a AllocatedImage,
@@ -258,7 +252,7 @@ fn make_depth_targets(
             ctx,
             extent.into(),
             vk::Format::D32_SFLOAT,
-            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             DEPTH_SUBRES_RANGE,
             c"depth target",
         )

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use ash::vk;
+use bytemuck::{Pod, Zeroable};
 
 use crate::{
     gpu::{
@@ -10,6 +11,13 @@ use crate::{
 };
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/depth-prepass.spv"));
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct PushConstants {
+    camera_bda: u64, // CameraState*
+    chunk_metadata_bda: u64, // ChunkMetadata*
+}
 
 pub struct DepthPrepass {
     pipeline: vk::Pipeline,
@@ -35,7 +43,7 @@ impl DepthPrepass {
         let push_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .offset(0)
-            .size(16); // camera ptr (8 bytes) + world ptr (8 bytes)
+            .size(std::mem::size_of::<PushConstants>() as u32);
 
         let layout_info = vk::PipelineLayoutCreateInfo::default()
             .push_constant_ranges(std::slice::from_ref(&push_range));
@@ -69,7 +77,7 @@ impl DepthPrepass {
             .dynamic_states(&dyn_states);
 
         let rast_ci = vk::PipelineRasterizationStateCreateInfo::default()
-            .cull_mode(vk::CullModeFlags::BACK)
+            .cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0);
@@ -170,10 +178,10 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
                 self.layout,
                 vk::ShaderStageFlags::VERTEX,
                 0,
-                bytemuck::bytes_of(&[
-                    frame.resources.camera_bda,
-                    frame.resources.chunk_metadata_bda,
-                ]),
+                bytemuck::bytes_of(&PushConstants {
+                    camera_bda: frame.resources.camera_bda,
+                    chunk_metadata_bda: frame.resources.chunk_metadata_bda,
+                }),
             );
 
             let viewport = vk::Viewport {
@@ -192,7 +200,10 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
             };
             ctx.dev.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
 
-            ctx.dev.cmd_draw(cmd, 36, frame.resources.num_chunks, 0, 0);
+            // vertex shader only generates 3 visible faces, so only 18 verts. if the
+            // camera is inside a chunk, the vertex shader generates a screen-sized
+            // tri and then puts the rest of the verts in degenerate invisible tris
+            ctx.dev.cmd_draw(cmd, 18, frame.resources.num_chunks, 0, 0);
             ctx.dev.cmd_end_rendering(cmd);
         }
 

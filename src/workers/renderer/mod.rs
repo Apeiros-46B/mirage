@@ -9,15 +9,6 @@
 //! - resolve pass: apply colors to visbuf based on shading results
 //! - blit pass: blit shaded image to swapchain
 //! - egui pass: draw ui
-//!
-//! 64-bit voxel ID structure:
-//! - entity flag: 1 bit
-//! - if entity flag is set:
-//!   - entity ID
-//!   - entity-local coordinates
-//! - else:
-//!   - active chunk index (index into array of loaded chunks, not GUID)
-//!   - chunk-local coordinates (24 bits)
 mod frames;
 mod passes;
 mod resources;
@@ -37,7 +28,7 @@ use crate::{
         RendererTelemetry,
         RendererToApp,
     },
-    world::{ChunkMetadata, ChunkState, Node},
+    world::{build_64_tree, build_occupancy_grid, ChunkMetadata, ChunkState},
 };
 use frames::{FrameManager, RenderTarget};
 use passes::Passes;
@@ -138,22 +129,33 @@ impl Worker for Renderer {
         // TODO(loader): remove this when chunk streaming is in
         if !this.staged_chunk {
             this.staged_chunk = true;
-            this.num_chunks = 2;
 
-            let node = Node::new().with_child_mask(0).with_mat_id(1);
+            let grid = build_occupancy_grid(|x, y, z| {
+                let x = i32::from(x) - 128;
+                let y = i32::from(y) - 128;
+                let z = i32::from(z) - 128;
+                x * x + y * y + z * z < 128 * 128
+            });
+            let nodes = build_64_tree(&grid);
 
             let root = this.resources.voxel_data.bda;
             let meta = ChunkMetadata::new().with_state(ChunkState::Loaded);
 
             let roots_slice = [root, root];
-            let meta_slice = [meta, meta.with_x(1).with_y(1).with_z(1)];
+            let meta_slice = [
+                meta.with_x(0).with_y(0).with_z(0),
+                meta.with_x(1).with_y(1).with_z(1),
+            ];
+            this.num_chunks = meta_slice.len() as u32;
 
             unsafe {
+                let nodes_stage = target.arena.stage_slice(&nodes);
+
                 this.ctx.dev.cmd_copy_buffer(
                     target.cmd,
                     target.arena.buf,
                     this.resources.voxel_data.buf,
-                    &[target.arena.stage(&node).get_buf_copy(0)],
+                    &[this.resources.voxel_data.copy_from(&nodes_stage)],
                 );
 
                 let roots_stage = target.arena.stage_slice(&roots_slice);

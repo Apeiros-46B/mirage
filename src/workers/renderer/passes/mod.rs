@@ -88,7 +88,7 @@ impl Task<FrameCtx<'_>> for Passes {
             self.clear_pass.execute(&ctx, frame)?;
         }
 
-        let mut depth_barrier = frame.resources.depth_barrier()
+        let depth_barrier = frame.resources.depth_barrier()
             .begin(
                 vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
                 vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
@@ -112,18 +112,13 @@ impl Task<FrameCtx<'_>> for Passes {
                 vk::PipelineStageFlags2::COMPUTE_SHADER,
                 vk::AccessFlags2::SHADER_WRITE,
             );
-        depth_barrier.transition(
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::PipelineStageFlags2::COMPUTE_SHADER,
-            vk::AccessFlags2::SHADER_SAMPLED_READ,
-        );
         chunk_id_barrier.transition(
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             vk::PipelineStageFlags2::COMPUTE_SHADER,
             vk::AccessFlags2::SHADER_SAMPLED_READ,
         );
         unsafe {
-            ctx.barrier(cmd, [visbuf_barrier, depth_barrier, chunk_id_barrier]);
+            ctx.barrier(cmd, [visbuf_barrier, chunk_id_barrier]);
             self.primary_pass.execute(&ctx, frame)?;
         }
 

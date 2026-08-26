@@ -1,4 +1,4 @@
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat3, Mat4, Vec2, Vec3};
 use winit::dpi::PhysicalSize;
 
 use crate::workers::msgs::CameraState;
@@ -69,8 +69,9 @@ impl Camera {
     }
 
     pub fn get_state(&self) -> CameraState {
+        let view_rot = Mat4::from_mat3(Mat3::from_mat4(self.view));
         CameraState {
-            view_proj: self.proj * self.view,
+            rel_view_proj: self.proj * view_rot,
             inv_proj: self.inv_proj,
             inv_view: self.inv_view,
             pos: self.pos,

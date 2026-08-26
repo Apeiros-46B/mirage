@@ -75,9 +75,9 @@ impl AllocatedMegabuffer {
         }
     }
 
-    /// build a copy region from a staged slice into this view's offset
+    /// build a copy region from a staged slice into this view's offset.
+    /// if this buffer is owned and not a view, then just copy into it at offset 0
     pub fn copy_from(&self, src: &StagingSlice) -> vk::BufferCopy {
-        debug_assert!(self.mem.is_none()); // must be a view
         src.get_buf_copy(self.ofs)
     }
 }

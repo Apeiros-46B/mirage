@@ -27,33 +27,75 @@ VertexOutput vsh(uint vertId : SV_VertexID, uint chunkId : SV_InstanceID) {
 
 	// ccw winding
 	const uint INDICES[36] = {
-		0, 1, 2, 0, 2, 3, // front (-Z)
-		5, 4, 7, 5, 7, 6, // back (+Z)
-		3, 2, 6, 3, 6, 7, // top (+Y)
+		0, 1, 2, 0, 2, 3, // front  (-Z)
+		5, 4, 7, 5, 7, 6, // back   (+Z)
+		3, 2, 6, 3, 6, 7, // top    (+Y)
 		4, 5, 1, 4, 1, 0, // bottom (-Y)
-		1, 5, 6, 1, 6, 2, // right (+X)
-		4, 0, 3, 4, 3, 7  // left (-X)
+		1, 5, 6, 1, 6, 2, // right  (+X)
+		4, 0, 3, 4, 3, 7  // left   (-X)
 	};
 
 	ChunkMetadata meta = push.chunks[chunkId];
 
-	float3 chunkLocalPos = CORNERS[INDICES[vertId]];
-	float3 realmLocalPos = float3(
-		float(meta.x),
-		float(meta.y),
-		float(meta.z),
-	);
-	float3 worldPos = (chunkLocalPos + realmLocalPos) * 256.0;
+	float3 chunkMin = float3(float(meta.x), float(meta.y), float(meta.z)) * 256.0;
+	float3 chunkMax = chunkMin + 256.0;
 
-	VertexOutput out;
-	out.pos = mul(push.camera.viewProj, float4(worldPos, 1.0));
-	out.chunkId = chunkId;
-	return out;
+	bool cameraInside = all(push.camera.pos >= chunkMin)
+	                 && all(push.camera.pos < chunkMax);
+
+	VertexOutput vert;
+	vert.chunkId = chunkId;
+	if (cameraInside) {
+		const float2 FULLSCREEN_TRI[3] = {
+			float2(-1, -1),
+			float2(-1,  3),
+			float2( 3, -1),
+		};
+
+		if (vertId < 3) {
+			// depth 0.0 is the near plane, occludes all other chunk proxies
+			// TODO: if using reverse-Z, i think this needs to be changed to 1.0
+			vert.pos = float4(FULLSCREEN_TRI[vertId], 0.0, 1.0);
+		} else {
+			// form remaining verts into invisible degenerate tris
+			vert.pos = float4(0.0, 0.0, 0.0, 1.0);
+		}
+		return vert;
+	}
+
+	uint axisId = vertId / 6;
+	uint faceId;
+	bool faceVis;
+
+	if (axisId == 0) {
+		faceId  = push.camera.pos.x < chunkMin.x ? 5 : 4;
+		faceVis = push.camera.pos.x < chunkMin.x
+		       || push.camera.pos.x > chunkMax.x;
+	} else if (axisId == 1) {
+		faceId  = push.camera.pos.y < chunkMin.y ? 3 : 2;
+		faceVis = push.camera.pos.y < chunkMin.y
+		       || push.camera.pos.y > chunkMax.y;
+	} else {
+		faceId  = push.camera.pos.z < chunkMin.z ? 0 : 1;
+		faceVis = push.camera.pos.z < chunkMin.z
+		       || push.camera.pos.z > chunkMax.z;
+	}
+
+	if (!faceVis) {
+		vert.pos = float4(0.0, 0.0, 0.0, 1.0);
+	} else {
+		uint faceVertId = vertId % 6;
+		uint cornerId = INDICES[faceId * 6 + faceVertId];
+		float3 relPos = (chunkMin - push.camera.pos) + CORNERS[cornerId] * 256.0;
+		vert.pos = mul(push.camera.relViewProj, float4(relPos, 1.0));
+	}
+
+	return vert;
 }
 
 // just return the chunk ID to the render target
 [shader("fragment")]
 [earlydepthstencil]
-uint fsh(VertexOutput in) : SV_Target0 {
-	return in.chunkId;
+uint fsh(VertexOutput vert) : SV_Target0 {
+	return vert.chunkId;
 }

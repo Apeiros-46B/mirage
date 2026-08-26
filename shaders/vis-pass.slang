@@ -11,16 +11,21 @@ ConstantBuffer<PushConstants> push;
 [[vk::binding(2, 0)]] RWTexture2D<uint64_t> visbufTextures[];
 [[vk::binding(2, 0)]] RWTexture2D<float4> colorTextures[];
 
-// #define DEBUG_COLOR
+#define DEBUG_COLOR
+// #define DEBUG_COLOR_MOD
 
 float3 id_to_color(uint64_t v) {
 	// no voxel hit
 	if (v == 0xFFFFFFFFFFFFFFFF) return float3(1.0, 1.0, 1.0);
 
-#ifdef DEBUG_COLOR
+#if defined(DEBUG_COLOR)
 	uint r = uint(v) & 255;
 	uint g = uint(v >> 8) & 255;
 	uint b = uint(v >> 16) & 255;
+#elif defined(DEBUG_COLOR_MOD)
+	uint r = (uint(v) & 255) % 16 * 16;
+	uint g = (uint(v >> 8) & 255) % 16 * 16;
+	uint b = (uint(v >> 16) & 255) % 16 * 16;
 #else
 	uint state = uint(v ^ (v >> 32));
 

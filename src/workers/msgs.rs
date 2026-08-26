@@ -15,7 +15,7 @@ use crate::sync::worker::channel_routing_for;
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 #[repr(C)]
 pub struct CameraState {
-    pub view_proj: Mat4,
+    pub rel_view_proj: Mat4,
     pub inv_proj: Mat4,
     pub inv_view: Mat4,
     pub pos: Vec3,
