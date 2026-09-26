@@ -125,9 +125,6 @@ impl Camera {
         let chunk_delta = (self.local_pos / chunk_side).floor().as_ivec3();
         self.chunk_pos += chunk_delta;
         self.local_pos -= chunk_delta.as_vec3() * chunk_side;
-
-        debug_assert!(self.local_pos.cmpge(Vec3::ZERO).all());
-        debug_assert!(self.local_pos.cmplt(Vec3::splat(chunk_side)).all());
     }
 
     fn recalc_forward(&mut self) {

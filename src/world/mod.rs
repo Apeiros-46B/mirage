@@ -314,18 +314,19 @@ pub struct BuiltWorld {
 
 impl BuiltWorld {
     pub fn new() -> Self {
-        let radius = CHUNK_SIDE as i32 / 2;
         let nodes = OccupancyGrid::new(|x, y, z| {
-            let x = i32::from(x) - radius;
-            let y = i32::from(y) - radius;
-            let z = i32::from(z) - radius;
-            x * x + y * y + z * z <= radius * radius
+            if x / 16 % 2 != 0 { return false }
+            if y / 16 % 2 != 0 { return false }
+            if z / 16 % 2 != 0 { return false }
+            let xi = i32::from(x % 16) - 8;
+            let yi = i32::from(y % 16) - 8;
+            let zi = i32::from(z % 16) - 8;
+            return xi * xi + yi * yi + zi * zi < 64;
         })
             .build_tree();
 
         let chunks = [
             [MAX_CHUNK_COORD, MAX_CHUNK_COORD, MAX_CHUNK_COORD],
-            [MAX_CHUNK_COORD, MAX_CHUNK_COORD - 1, MAX_CHUNK_COORD],
         ];
         let mut chunk_directory = ChunkDirectoryData::new();
         let mut chunk_metadata = Vec::with_capacity(chunks.len() + 1);

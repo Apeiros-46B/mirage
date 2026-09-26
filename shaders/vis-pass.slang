@@ -15,8 +15,8 @@ ConstantBuffer<PushConstants> push;
 [[vk::binding(2, 0)]] RWTexture2D<float4> colorTextures[];
 
 // #define DEBUG_POSITION
-// #define DEBUG_POSITION_MOD
-#define DEBUG_FACE
+#define DEBUG_POSITION_MOD
+// #define DEBUG_FACE
 // #define DEBUG_MATERIAL
 // #define DEBUG_CHUNK
 
@@ -68,5 +68,5 @@ void main(uint3 threadId : SV_DispatchThreadID) {
 
 	VisbufKey key;
 	key.data = visbufTex.Load(threadId.xy);
-	colorTex.Store(threadId.xy, float4(keyToColor(key), 1.0));
+	colorTex.Store(threadId.xy, float4(pow(keyToColor(key), 2.2), 1.0));
 }
