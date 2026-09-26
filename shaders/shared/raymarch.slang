@@ -1,7 +1,6 @@
 import camera;
+import space;
 
-static const int REALM_CHUNK_SIDE = 4096;
-static const float CHUNK_VOXEL_SIDE = 256.0;
 static const float FLOAT_MAX = 3.402823466e+38;
 
 // {{{ traversal state
@@ -10,7 +9,9 @@ struct ChunkCursor {
 	uint realmId;
 
 	// move to first chunk beyond the current aligned skip region along ray
-	// - ray.pos is realm-local voxel coords
+	// - ray.chunkPos is a signed logical chunk coord
+	// - ray.localPos is in [0, CHUNK_SIDE) on every axis
+	// - this.coord is the biased unsigned coord of the current region
 	// - ray.dir may contain zero components but cannot be 0,0,0
 	// - skipSide must be {1,16,256,4096} (see ChunkDirectory.lookupChunk)
 	// - corresponding aligned region must contain cur.coord
@@ -27,14 +28,17 @@ struct ChunkCursor {
 			float3(regionMin),
 		);
 
-		float3 rayOrigin = ray.pos / CHUNK_VOXEL_SIDE;
-		float3 sideDist = (boundary - rayOrigin) / ray.dir;
+		int3 origStoredC = ray.chunkPos + CHUNK_COORD_BIAS; // in chunk units
+		float3 origLocalC = ray.localPos / CHUNK_SIDE; // in chunk units
+
+		float3 boundaryDelta = float3(boundary - origStoredC) - origLocalC;
+		float3 sideDist = boundaryDelta / ray.dir;
 		if (ray.dir.x == 0.0) sideDist.x = FLOAT_MAX;
 		if (ray.dir.y == 0.0) sideDist.y = FLOAT_MAX;
 		if (ray.dir.z == 0.0) sideDist.z = FLOAT_MAX;
 
 		float nextDist = min(min(sideDist.x, sideDist.y), sideDist.z);
-		int3 nextCoord = int3(floor(rayOrigin + ray.dir * nextDist));
+		int3 nextCoord = origStoredC + int3(floor(origLocalC + ray.dir * nextDist));
 
 		if (sideDist.x == nextDist) {
 			nextCoord.x = ray.dir.x > 0.0 ? regionMax.x : regionMin.x - 1;
@@ -48,7 +52,7 @@ struct ChunkCursor {
 
 		this.coord = nextCoord;
 
-		return all(nextCoord >= 0) && all(nextCoord < REALM_CHUNK_SIDE);
+		return all(nextCoord >= 0) && all(nextCoord < REALM_SIDE);
 	}
 };
 // }}}

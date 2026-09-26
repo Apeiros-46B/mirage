@@ -1,4 +1,5 @@
 import shared.camera;
+import shared.space;
 import shared.world;
 
 struct PushConstants {
@@ -38,12 +39,13 @@ VertexOutput vsh(uint vertId : SV_VertexID, uint chunkIdx : SV_InstanceID) {
 	// chunk id 0 is reserved as a sentinel for "no chunk"
 	uint chunkId = chunkIdx + 1;
 	ChunkMetadata meta = push.chunks[chunkId];
+	RelChunkBounds bounds = RelChunkBounds(
+		meta.logicalPos(),
+		push.camera.chunkPos,
+		push.camera.localPos,
+	);
 
-	float3 chunkMin = float3(float(meta.x), float(meta.y), float(meta.z)) * 256.0;
-	float3 chunkMax = chunkMin + 256.0;
-
-	bool cameraInside = all(push.camera.pos >= chunkMin)
-	                 && all(push.camera.pos < chunkMax);
+	bool cameraInside = all(bounds.min <= 0.0) && all(bounds.max > 0.0);
 
 	VertexOutput vert;
 	vert.chunkId = chunkId;
@@ -70,17 +72,14 @@ VertexOutput vsh(uint vertId : SV_VertexID, uint chunkIdx : SV_InstanceID) {
 	bool faceVis;
 
 	if (axisId == 0) {
-		faceId  = push.camera.pos.x < chunkMin.x ? 5 : 4;
-		faceVis = push.camera.pos.x < chunkMin.x
-		       || push.camera.pos.x > chunkMax.x;
+		faceId  = bounds.min.x > 0.0 ? 5 : 4;
+		faceVis = bounds.min.x > 0.0 || bounds.max.x <= 0.0;
 	} else if (axisId == 1) {
-		faceId  = push.camera.pos.y < chunkMin.y ? 3 : 2;
-		faceVis = push.camera.pos.y < chunkMin.y
-		       || push.camera.pos.y > chunkMax.y;
+		faceId  = bounds.min.y > 0.0 ? 3 : 2;
+		faceVis = bounds.min.y > 0.0 || bounds.max.y <= 0.0;
 	} else {
-		faceId  = push.camera.pos.z < chunkMin.z ? 0 : 1;
-		faceVis = push.camera.pos.z < chunkMin.z
-		       || push.camera.pos.z > chunkMax.z;
+		faceId  = bounds.min.z > 0.0 ? 0 : 1;
+		faceVis = bounds.min.z > 0.0 || bounds.max.z <= 0.0;
 	}
 
 	if (!faceVis) {
@@ -88,7 +87,7 @@ VertexOutput vsh(uint vertId : SV_VertexID, uint chunkIdx : SV_InstanceID) {
 	} else {
 		uint faceVertId = vertId % 6;
 		uint cornerId = INDICES[faceId * 6 + faceVertId];
-		float3 relPos = (chunkMin - push.camera.pos) + CORNERS[cornerId] * 256.0;
+		float3 relPos = bounds.min + CORNERS[cornerId] * CHUNK_SIDE;
 		vert.pos = mul(push.camera.relViewProj, float4(relPos, 1.0));
 	}
 

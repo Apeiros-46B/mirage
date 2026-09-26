@@ -1,13 +1,12 @@
 // see crate::world
 // TODO: Chunk layout can probably be made better. we do not need like 32*2^18 portals
 import raymarch;
+import space;
 
-static const uint CHUNK_N = 1 << 20;
 static const uint REALM_N = 1 << 3;
 static const uint PORTALS_PER_CHUNK = 32;
 
 static const uint CHUNK_ID_MASK = (1 << 20) - 1;
-static const uint CHUNK_PAGE_ENTRIES = 16 * 16 * 16;
 
 // {{{ chunks
 // max 2 bits
@@ -21,22 +20,30 @@ enum ChunkState : uint {
 struct ChunkMetadata {
 	uint64_t data;
 
-	// bits [0,11]: realm-local x
+	// bits [0,11]: biased unsigned realm-local x
 	property uint x {
 		get { return uint(bitfieldExtract(data, 0, 12)); }
 		set { data = bitfieldInsert(data, uint64_t(newValue), 0, 12); }
 	}
 
-	// bits [12,23]: realm-local y
+	// bits [12,23]: biased unsigned realm-local y
 	property uint y {
 		get { return uint(bitfieldExtract(data, 12, 12)); }
 		set { data = bitfieldInsert(data, uint64_t(newValue), 12, 12); }
 	}
 
-	// bits [24,35]: realm-local z
+	// bits [24,35]: biased unsigned realm-local z
 	property uint z {
 		get { return uint(bitfieldExtract(data, 24, 12)); }
 		set { data = bitfieldInsert(data, uint64_t(newValue), 24, 12); }
+	}
+
+	uint3 storedPos() {
+		return uint3(x, y, z);
+	}
+
+	int3 logicalPos() {
+		return storedToLogicalChunkCoord(storedPos());
 	}
 
 	// bits [36,53]: index into portal megabuffer, points to a slice of N portals
@@ -103,7 +110,7 @@ struct ChunkDirectory {
 	uint* roots;
 
 	// returns 0-4095 morton idx for one page (XZY interleaved)
-	// - coord must be a >0 12-bit realm-local chunk coord
+	// - coord must be in [0, 4096) on every axis
 	// - shift must be {8,4,0}, for L3,2,1 respectively
 	static uint _mortonNibble(int3 coord, uint shift) {
 		uint3 nibble = uint3(coord) >> shift & 0xFu;
@@ -128,24 +135,24 @@ struct ChunkDirectory {
 	// - cur.realmId must a valid realm id (<REALM_N)
 	// skipSide is the side of empty region safe to skip in one step from this cur:
 	// - 1 for an L1 entry
-	// - {4096,256,16} if missing L{3,2,1}
+	// - the aligned region side if an L3, L2, or L1 page is absent
 	uint lookupChunk(ChunkCursor cur, out uint skipSide) {
 		uint page = roots[cur.realmId];
 		if (page == 0) {
-			skipSide = 4096;
+			skipSide = CHUNK_PAGE_SIDE * CHUNK_PAGE_SIDE * CHUNK_PAGE_SIDE;
 			return 0;
 		}
 
 		uint ent = _entAt(page, cur.coord, 8);
 		if (ent == 0) {
-			skipSide = 256;
+			skipSide = CHUNK_PAGE_SIDE * CHUNK_PAGE_SIDE;
 			return 0;
 		}
 
 		page = ent;
 		ent = _entAt(page, cur.coord, 4);
 		if (ent == 0) {
-			skipSide = 16;
+			skipSide = CHUNK_PAGE_SIDE;
 			return 0;
 		}
 

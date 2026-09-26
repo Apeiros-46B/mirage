@@ -19,7 +19,14 @@ use crate::{
     workers::{
         game::{Game, GameInit},
         msgs::{
-            AppMsg, AppRxBundle, AppTxBundle, EguiUpdate, GameMsg, GameTelemetry, RendererMsg, RendererTelemetry
+            AppMsg,
+            AppRxBundle,
+            AppTxBundle,
+            EguiUpdate,
+            GameMsg,
+            GameTelemetry,
+            RendererMsg,
+            RendererTelemetry,
         },
         renderer::{Renderer, RendererInit},
     }

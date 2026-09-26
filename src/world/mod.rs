@@ -7,14 +7,25 @@ pub const REALM_ID_BITS: usize = 3;
 pub const PORTALS_PER_CHUNK: usize = 32;
 pub const CHUNK_N: usize = 1 << CHUNK_ID_BITS;
 pub const REALM_N: usize = 1 << REALM_ID_BITS;
+pub const CHUNK_SIDE: usize = 256;
+pub const REALM_SIDE: usize = 4096;
+pub const MIN_CHUNK_COORD: i32 = -2048;
+pub const MAX_CHUNK_COORD: i32 = 2047;
 
-const CHUNK_SIDE: usize = 256;
 const CHUNK_PAGE_SIDE: usize = 16;
 const CHUNK_PAGE_ENTRIES: usize = CHUNK_PAGE_SIDE.pow(3);
 const CHUNK_STATE_SHIFT: u32 = 30;
 const OCCUPANCY_WORDS: usize = CHUNK_SIDE * CHUNK_SIDE * CHUNK_SIDE / u64::BITS as usize;
 const NODE_PTR_MASK: u32 = 0x7FFF_FFFF;
 const NODE_LEAF_BIT: u32 = 0x8000_0000;
+
+// metadata and directory keys bias logical chunk coords into unsigned u12 storage
+pub fn encode_chunk_coord(coord: [i32; 3]) -> [u16; 3] {
+    coord.map(|component| {
+        assert!((MIN_CHUNK_COORD..=MAX_CHUNK_COORD).contains(&component));
+        (component + 2048) as u16
+    })
+}
 
 // max 2 bits
 #[derive(Clone, Copy, Debug, Specifier)]
@@ -234,14 +245,14 @@ impl ChunkDirectoryData {
     fn insert(
         &mut self,
         realm_id: usize,
-        coord: [u16; 3],
+        coord: [i32; 3],
         state: ChunkState,
         chunk_id: u32,
     ) {
         assert!(realm_id < REALM_N);
-        assert!(coord.into_iter().all(|component| component < 4096));
         assert!(chunk_id > 0 && chunk_id < CHUNK_N as u32);
         assert!(matches!(state, ChunkState::Solid | ChunkState::Loaded));
+        let stored_coord = encode_chunk_coord(coord);
 
         let root_page = if self.roots[realm_id] == 0 {
             let page = self.allocate_page();
@@ -250,9 +261,9 @@ impl ChunkDirectoryData {
         } else {
             self.roots[realm_id]
         };
-        let l2_page = self.child_page(root_page, morton_nibble(coord, 8));
-        let l1_page = self.child_page(l2_page, morton_nibble(coord, 4));
-        let leaf_idx = morton_nibble(coord, 0);
+        let l2_page = self.child_page(root_page, morton_nibble(stored_coord, 8));
+        let l1_page = self.child_page(l2_page, morton_nibble(stored_coord, 4));
+        let leaf_idx = morton_nibble(stored_coord, 0);
         let entry_idx = l1_page as usize * CHUNK_PAGE_ENTRIES + leaf_idx;
 
         assert_eq!(self.pages[entry_idx], 0, "duplicate chunk directory entry");
@@ -303,17 +314,19 @@ pub struct BuiltWorld {
 
 impl BuiltWorld {
     pub fn new() -> Self {
+        let radius = CHUNK_SIDE as i32 / 2;
         let nodes = OccupancyGrid::new(|x, y, z| {
-            let x = i32::from(x) - 128;
-            let y = i32::from(y) - 128;
-            let z = i32::from(z) - 128;
-            x * x + y * y + z * z <= 128 * 128
+            let x = i32::from(x) - radius;
+            let y = i32::from(y) - radius;
+            let z = i32::from(z) - radius;
+            x * x + y * y + z * z <= radius * radius
         })
             .build_tree();
 
-        // let chunks = [[0, 0, 0], [0, 1, 0]];
-        // TODO(camera): imprecision
-        let chunks = [[4095, 4095, 4095], [4095, 4094, 4095]];
+        let chunks = [
+            [MAX_CHUNK_COORD, MAX_CHUNK_COORD, MAX_CHUNK_COORD],
+            [MAX_CHUNK_COORD, MAX_CHUNK_COORD - 1, MAX_CHUNK_COORD],
+        ];
         let mut chunk_directory = ChunkDirectoryData::new();
         let mut chunk_metadata = Vec::with_capacity(chunks.len() + 1);
         chunk_metadata.push(ChunkMetadata::new().with_state(ChunkState::Empty));
@@ -321,11 +334,12 @@ impl BuiltWorld {
         for (chunk_idx, [x, y, z]) in chunks.into_iter().enumerate() {
             let chunk_id = chunk_idx as u32 + 1;
             chunk_directory.insert(0, [x, y, z], ChunkState::Loaded, chunk_id);
+            let [stored_x, stored_y, stored_z] = encode_chunk_coord([x, y, z]);
             chunk_metadata.push(
                 ChunkMetadata::new()
-                    .with_x(x)
-                    .with_y(y)
-                    .with_z(z)
+                    .with_x(stored_x)
+                    .with_y(stored_y)
+                    .with_z(stored_z)
                     .with_realm_id(0)
                     .with_state(ChunkState::Loaded),
             );

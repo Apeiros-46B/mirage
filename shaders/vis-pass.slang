@@ -52,7 +52,7 @@ float3 keyToColor(VisbufKey key) {
 #elif defined(DEBUG_CHUNK)
 	return hashColor(key.chunkId);
 #else
-	return float3(1.0, 0.0, 1.0);
+	return float3(0.9);
 #endif
 }
 

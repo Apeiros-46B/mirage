@@ -1,8 +1,26 @@
-use glam::{Mat3, Mat4, Vec2, Vec3};
+use glam::{IVec3, Mat4, Vec2, Vec3};
 use winit::dpi::PhysicalSize;
 
-use crate::workers::msgs::CameraState;
+use crate::{
+    workers::msgs::CameraState,
+    world::{CHUNK_SIDE, MAX_CHUNK_COORD},
+};
 use super::{Polled, input::{InputBtn, InputState}};
+
+const UP_DIR: Vec3 = Vec3::new(0.0, 1.0, 0.0);
+const BASE_SPEED: f32 = 50.0;
+const BASE_ROT_SPEED: f32 = 0.005;
+
+const DEFAULT_CHUNK_POS: IVec3 = IVec3::new(
+    MAX_CHUNK_COORD,
+    MAX_CHUNK_COORD,
+    MAX_CHUNK_COORD + 2,
+);
+const DEFAULT_LOCAL_POS: Vec3 = Vec3::new(128.0, 128.0, 0.0);
+const DEFAULT_YAW: f32 = -std::f32::consts::FRAC_PI_2; // facing -Z
+const DEFAULT_PITCH: f32 = 0.0;
+
+pub const DEFAULT_FOV_DEG: f32 = 70.0_f32;
 
 #[derive(Clone, Debug)]
 pub struct Camera {
@@ -10,7 +28,8 @@ pub struct Camera {
     near_clip: f32,
     far_clip: f32,
 
-    pub pos: Vec3,
+    pub chunk_pos: IVec3,
+    pub local_pos: Vec3,
     pub forward_dir: Vec3,
 
     pub pitch: f32,
@@ -24,32 +43,19 @@ pub struct Camera {
     scr_sz: Vec2,
 }
 
-const UP_DIR: Vec3 = Vec3::new(0.0, 1.0, 0.0);
-const BASE_SPEED: f32 = 50.0;
-const BASE_ROT_SPEED: f32 = 0.005;
-
-// const DEFAULT_POS: Vec3 = Vec3::new(128.0, 128.0, 512.0);
-// TODO(camera): imprecision
-const DEFAULT_POS: Vec3 = Vec3::new(1048576.0+128.0, 1048576.0+128.0, 1048576.0+512.0);
-const DEFAULT_YAW: f32 = -std::f32::consts::FRAC_PI_2; // facing -Z
-const DEFAULT_PITCH: f32 = 0.0;
-
-pub const DEFAULT_FOV_DEG: f32 = 70.0_f32;
-
 impl Camera {
     pub fn new(scr_sz: PhysicalSize<u32>) -> Self {
         let vertical_fov = DEFAULT_FOV_DEG.to_radians();
         let near_clip = 0.1;
         let far_clip = 1000.0;
 
-        let pos = DEFAULT_POS;
-
         let mut this = Self {
             vertical_fov,
             near_clip,
             far_clip,
 
-            pos,
+            chunk_pos: DEFAULT_CHUNK_POS,
+            local_pos: DEFAULT_LOCAL_POS,
             forward_dir: Vec3::ZERO,
             pitch: DEFAULT_PITCH,
             yaw: DEFAULT_YAW,
@@ -71,13 +77,14 @@ impl Camera {
     }
 
     pub fn get_state(&self) -> CameraState {
-        let view_rot = Mat4::from_mat3(Mat3::from_mat4(self.view));
         CameraState {
-            rel_view_proj: self.proj * view_rot,
+            rel_view_proj: self.proj * self.view,
             inv_proj: self.inv_proj,
             inv_view: self.inv_view,
-            pos: self.pos,
-            _pad: 0.0,
+            chunk_pos: self.chunk_pos,
+            _chunk_pad: 0,
+            local_pos: self.local_pos,
+            _local_pad: 0.0,
         }
     }
 
@@ -106,8 +113,21 @@ impl Camera {
     }
 
     fn recalc_view(&mut self) {
-        self.view = Mat4::look_at_rh(self.pos, self.pos + self.forward_dir, UP_DIR);
+        self.view = Mat4::look_to_rh(Vec3::ZERO, self.forward_dir, UP_DIR);
         self.inv_view = self.view.inverse();
+    }
+
+    // might not be great if delta is large, use a small delta
+    fn translate(&mut self, delta: Vec3) {
+        let chunk_side = CHUNK_SIDE as f32;
+        self.local_pos += delta;
+
+        let chunk_delta = (self.local_pos / chunk_side).floor().as_ivec3();
+        self.chunk_pos += chunk_delta;
+        self.local_pos -= chunk_delta.as_vec3() * chunk_side;
+
+        debug_assert!(self.local_pos.cmpge(Vec3::ZERO).all());
+        debug_assert!(self.local_pos.cmplt(Vec3::splat(chunk_side)).all());
     }
 
     fn recalc_forward(&mut self) {
@@ -144,27 +164,27 @@ impl Polled for Camera {
         let speed = BASE_SPEED;
 
         if input.is_pressed(InputBtn::MoveFwd) {
-            self.pos += self.forward_dir * speed * dt;
+            self.translate(self.forward_dir * speed * dt);
             moving = true;
         } else if input.is_pressed(InputBtn::MoveBack) {
-            self.pos -= self.forward_dir * speed * dt;
+            self.translate(-self.forward_dir * speed * dt);
             moving = true;
         }
 
         if input.is_pressed(InputBtn::MoveLeft) {
-            self.pos -= right_dir * speed * dt;
+            self.translate(-right_dir * speed * dt);
             moving = true;
         } else if input.is_pressed(InputBtn::MoveRight) {
-            self.pos += right_dir * speed * dt;
+            self.translate(right_dir * speed * dt);
             moving = true;
         }
 
-        // has to be inverse for some reason... idk why
+        // has to be inverse for some reason... idk why. probably a coordspc issue
         if input.is_pressed(InputBtn::MoveDown) {
-            self.pos += UP_DIR * speed * dt;
+            self.translate(UP_DIR * speed * dt);
             moving = true;
         } else if input.is_pressed(InputBtn::MoveUp) {
-            self.pos -= UP_DIR * speed * dt;
+            self.translate(-UP_DIR * speed * dt);
             moving = true;
         }
 

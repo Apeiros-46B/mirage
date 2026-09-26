@@ -2,7 +2,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use egui::{ClippedPrimitive, TexturesDelta};
-use glam::{Mat4, Vec3};
+use glam::{IVec3, Mat4, Vec3};
 use winit::{
     dpi::PhysicalSize,
     event::{ElementState, MouseButton},
@@ -18,8 +18,10 @@ pub struct CameraState {
     pub rel_view_proj: Mat4,
     pub inv_proj: Mat4,
     pub inv_view: Mat4,
-    pub pos: Vec3,
-    pub _pad: f32,
+    pub chunk_pos: IVec3,
+    pub _chunk_pad: i32,
+    pub local_pos: Vec3,
+    pub _local_pad: f32,
 }
 
 pub enum AppMsg {

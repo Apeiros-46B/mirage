@@ -3,6 +3,7 @@
 // TODO: move more traversal stuff to shared.raymarch, need to reuse in for shading
 import shared.camera;
 import shared.raymarch;
+import shared.space;
 import shared.world;
 
 struct PushConstants {
@@ -130,8 +131,11 @@ void traceTree(
 
 void traceChunk(Ray ray, uint chunkId, out VisbufKey key) {
 	ChunkMetadata meta = push.chunkMetadata[chunkId];
-	float3 chunkMin = float3(meta.x, meta.y, meta.z) * CHUNK_VOXEL_SIDE;
-	float3 chunkMax = chunkMin + CHUNK_VOXEL_SIDE;
+	RelChunkBounds bounds = RelChunkBounds(
+		meta.logicalPos(),
+		ray.chunkPos,
+		ray.localPos,
+	);
 
 	float3 safeDir = ray.dir;
 
@@ -140,8 +144,8 @@ void traceChunk(Ray ray, uint chunkId, out VisbufKey key) {
 	if (safeDir.z == 0.0) safeDir.z = MIN_RAY_DIR;
 
 	float3 invDir = 1.0 / safeDir;
-	float3 plane1 = (chunkMin - ray.pos) * invDir;
-	float3 plane2 = (chunkMax - ray.pos) * invDir;
+	float3 plane1 = bounds.min * invDir;
+	float3 plane2 = bounds.max * invDir;
 	float3 planeNear = min(plane1, plane2);
 	float3 planeFar = max(plane1, plane2);
 
@@ -153,8 +157,8 @@ void traceChunk(Ray ray, uint chunkId, out VisbufKey key) {
 		return;
 	}
 
-	float3 posEntry = ray.pos + ray.dir * distMin;
-	float3 posTree = (posEntry - chunkMin) / CHUNK_VOXEL_SIDE + 1.0;
+	float3 posEntry = ray.dir * distMin;
+	float3 posTree = (posEntry - bounds.min) / CHUNK_SIDE + 1.0;
 	Node* nodes = push.chunkRoots[chunkId];
 	uint entryFace = faceOpposingRay(ray.dir);
 
@@ -179,8 +183,9 @@ void traceWorld(Ray ray, uint initChunkId, out VisbufKey key) {
 		return;
 	}
 
+	// TODO: when to stop looping?
 	[loop]
-	for (uint chunkStep = 0; chunkStep < 4096; chunkStep++) {
+	for (uint chunkStep = 0; chunkStep < 128; chunkStep++) {
 		uint skipSide;
 		uint chunkId = push.chunkDirectory.lookupChunk(cur, skipSide);
 
