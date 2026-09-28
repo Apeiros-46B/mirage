@@ -145,16 +145,15 @@ impl OccupancyGrid {
         Self { bits }
     }
 
-    pub fn build_tree(&self) -> Vec<Node> {
+    pub fn build_tree(&self) -> (Node, Vec<Node>) {
         let mut nodes = Vec::with_capacity(266_305);
-        nodes.push(Node::new_leaf(0));
 
-        nodes[0] = match Region::new(self, &mut nodes, [0; 3], CHUNK_SIDE) {
+        let root = match Region::new(self, &mut nodes, [0; 3], CHUNK_SIDE) {
             Region::Empty => Node::new_leaf(0),
             Region::Solid => Node::new_leaf(u64::MAX),
             Region::Node(node) => node,
         };
-        nodes
+        (root, nodes)
     }
 }
 
@@ -306,15 +305,16 @@ fn morton_nibble(coord: [u16; 3], shift: u32) -> usize {
 }
 
 pub struct BuiltWorld {
-    pub nodes: Vec<Node>,
-    pub chunk_root_offsets: Vec<u64>,
+    // branch offsets in both nodes and chunk_roots index nodes
+    pub nodes: Vec<Node>, // non-root nodes only
+    pub chunk_roots: Vec<Node>,
     pub chunk_metadata: Vec<ChunkMetadata>,
     pub chunk_directory: ChunkDirectoryData,
 }
 
 impl BuiltWorld {
     pub fn new() -> Self {
-        let nodes = OccupancyGrid::new(|x, y, z| {
+        let (root, nodes) = OccupancyGrid::new(|x, y, z| {
             if x / 16 % 2 != 0 { return false }
             if y / 16 % 2 != 0 { return false }
             if z / 16 % 2 != 0 { return false }
@@ -348,7 +348,10 @@ impl BuiltWorld {
 
         BuiltWorld {
             nodes,
-            chunk_root_offsets: vec![0; chunks.len() + 1],
+            // chunk id 0 means empty
+            chunk_roots: std::iter::once(Node::new_leaf(0))
+                .chain(std::iter::repeat_n(root, chunks.len()))
+                .collect(),
             chunk_metadata,
             chunk_directory,
         }

@@ -136,29 +136,17 @@ impl Worker for Renderer {
 
         // TODO(loader): remove this when chunk streaming is in
         if let Some(world) = this.pending_world.take() {
-            let roots = world.chunk_root_offsets
-                .iter()
-                .enumerate()
-                .map(|(chunk_id, offset)| {
-                    if chunk_id == 0 {
-                        0
-                    } else {
-                        this.resources.voxel_data.bda + *offset
-                    }
-                })
-                .collect::<Vec<_>>();
-
             unsafe {
                 let nodes_stage = target.arena.stage_slice(&world.nodes);
 
                 this.ctx.dev.cmd_copy_buffer(
                     target.cmd,
                     target.arena.buf,
-                    this.resources.voxel_data.buf,
-                    &[this.resources.voxel_data.copy_from(&nodes_stage)],
+                    this.resources.nodes.buf,
+                    &[this.resources.nodes.copy_from(&nodes_stage)],
                 );
 
-                let roots_stage = target.arena.stage_slice(&roots);
+                let roots_stage = target.arena.stage_slice(&world.chunk_roots);
                 let meta_stage = target.arena.stage_slice(&world.chunk_metadata);
 
                 this.ctx.dev.cmd_copy_buffer(

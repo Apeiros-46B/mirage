@@ -8,8 +8,10 @@ import shared.world;
 
 struct PushConstants {
 	CameraState* camera;
+
+	Node* nodes;
+	Node* chunkRoots;
 	ChunkMetadata* chunkMetadata;
-	Node** chunkRoots;
 	ChunkDirectory chunkDirectory;
 
 	uint32_t chunkIdIdx;
@@ -49,7 +51,10 @@ float3 floorToScale(float3 pos, int scaleExp) {
 	return bit_cast<float3>(bit_cast<uint3>(pos) & mask);
 }
 
+// TODO(design): should this even take in nodes param, since the layout is expected
+// to match exactly push.nodes and it's only ever used in one place?
 void traceTree(
+	Node root,
 	Node* nodes,
 	float3 origin,
 	float3 dir,
@@ -59,8 +64,8 @@ void traceTree(
 	uint stack[11]; // TODO: groupshared stack causes segfault on linux nvidia
 	int scaleExp = 21; // 0.25
 
-	uint nodeIdx = 0; // root
-	Node node = nodes[nodeIdx];
+	uint nodeIdx = 0; // unused at root scale
+	Node node = root;
 
 	if (dir.x == 0.0) dir.x = MIN_RAY_DIR;
 	if (dir.y == 0.0) dir.y = MIN_RAY_DIR;
@@ -122,7 +127,7 @@ void traceTree(
 
 			scaleExp = diffExp;
 			nodeIdx = stack[scaleExp >> 1];
-			node = nodes[nodeIdx];
+			node = scaleExp == 21 ? root : nodes[nodeIdx];
 		}
 	}
 
@@ -159,14 +164,20 @@ void traceChunk(Ray ray, uint chunkId, out VisbufKey key) {
 
 	float3 posEntry = ray.dir * distMin;
 	float3 posTree = (posEntry - bounds.min) / CHUNK_SIDE + 1.0;
-	Node* nodes = push.chunkRoots[chunkId];
 	uint entryFace = faceOpposingRay(ray.dir);
 
 	if (distNear >= 0.0) {
 		entryFace = faceCrossed(-planeNear, ray.dir);
 	}
 
-	traceTree(nodes, posTree, ray.dir, entryFace, key);
+	traceTree(
+		push.chunkRoots[chunkId],
+		push.nodes,
+		posTree,
+		ray.dir,
+		entryFace,
+		key
+	);
 	if (key.isHit()) key.data |= uint64_t(chunkId) << 28;
 }
 

@@ -21,6 +21,7 @@ use crate::{
         ChunkDirectory,
         ChunkDirectoryData,
         ChunkMetadata,
+        Node,
         REALM_N,
     },
 };
@@ -42,7 +43,7 @@ impl Destroy for ChunkHeaders {
 
 impl ChunkHeaders {
     fn new(ctx: &VulkanCtx) -> Result<Self> {
-        let roots_sz = (CHUNK_N * size_of::<u64>()) as u64;
+        let roots_sz = (CHUNK_N * size_of::<Node>()) as u64;
         let metadata_sz = (CHUNK_N * size_of::<ChunkMetadata>()) as u64;
 
         let data = AllocatedMegabuffer::new_alloc(
@@ -118,7 +119,7 @@ pub struct Resources {
 
     camera_rx: Output<CameraState>,
 
-    pub voxel_data: AllocatedMegabuffer,
+    pub nodes: AllocatedMegabuffer,
     pub chunk_headers: ChunkHeaders,
     pub chunk_directory: ChunkDirectoryBuffer,
 }
@@ -128,7 +129,7 @@ impl Destroy for Resources {
         unsafe {
             self.chunk_directory.destroy(ctx);
             self.chunk_headers.destroy(ctx);
-            self.voxel_data.destroy(ctx);
+            self.nodes.destroy(ctx);
 
             self.depth.destroy(ctx);
             self.chunk_id.destroy(ctx);
@@ -154,10 +155,10 @@ impl Resources {
         let color = make_color_targets(&ctx, extent)?;
         let visbuf = make_visbuf_targets(&ctx, extent)?;
 
-        let voxel_data = AllocatedMegabuffer::new_alloc(
+        let nodes = AllocatedMegabuffer::new_alloc(
             &ctx,
             (1 << 22) * 16, // temporary size, TODO: allocate large heap and suballoc
-            c"voxel_data",
+            c"nodes",
         )?;
         let chunk_headers = ChunkHeaders::new(&ctx)?;
         let chunk_directory = ChunkDirectoryBuffer::new(&ctx, directory)?;
@@ -178,7 +179,7 @@ impl Resources {
             visbuf,
             visbuf_idxs,
 
-            voxel_data,
+            nodes,
             chunk_headers,
             chunk_directory,
 
@@ -218,7 +219,7 @@ impl Resources {
         ResourceView {
             camera_bda: camera_buf.bda,
 
-            voxel_data_bda: self.voxel_data.bda,
+            nodes_bda: self.nodes.bda,
             chunk_metadata_bda: self.chunk_headers.metadata.bda,
             chunk_roots_bda: self.chunk_headers.roots.bda,
             chunk_directory: self.chunk_directory.directory(),
@@ -240,7 +241,7 @@ pub struct ResourceView<'a> {
     pub camera_bda: u64, // BDA pointer to CameraState
 
     // world buffer BDAs (handles stay on Resources for staging)
-    pub voxel_data_bda: u64,
+    pub nodes_bda: u64,
     pub chunk_metadata_bda: u64,
     pub chunk_roots_bda: u64,
     pub chunk_directory: ChunkDirectory,
