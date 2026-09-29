@@ -66,7 +66,9 @@ fn create_dev(
             .queue_priorities(&prios));
     }
 
+    // TODO: better feature checks
     let features = vk::PhysicalDeviceFeatures::default()
+        .depth_clamp(true)
         .shader_int16(true)
         .shader_int64(true);
 

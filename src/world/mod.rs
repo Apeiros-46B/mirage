@@ -315,6 +315,11 @@ pub struct BuiltWorld {
 impl BuiltWorld {
     pub fn new() -> Self {
         let (root, nodes) = OccupancyGrid::new(|x, y, z| {
+            // let x = i32::from(x) - 128;
+            // let y = i32::from(y) - 128;
+            // let z = i32::from(z) - 128;
+            // return x * x + y * y + z * z < 128*128;
+
             if x / 16 % 2 != 0 { return false }
             if y / 16 % 2 != 0 { return false }
             if z / 16 % 2 != 0 { return false }

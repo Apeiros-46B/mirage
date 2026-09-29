@@ -80,6 +80,7 @@ impl DepthPrepass {
             .cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .polygon_mode(vk::PolygonMode::FILL)
+            .depth_clamp_enable(true)
             .line_width(1.0);
 
         let multismp_ci = vk::PipelineMultisampleStateCreateInfo::default()
