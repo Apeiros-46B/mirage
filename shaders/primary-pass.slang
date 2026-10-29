@@ -29,6 +29,7 @@ void main(uint3 threadId : SV_DispatchThreadID) {
 	let chunkId = chunkIdTextures[push.chunkIdIdx].Load(threadId);
 
 	VisbufKey key;
+	key.data = 0; // default initializer does not work...
 
 	if (chunkId != 0) {
 		let primary = push.camera.primaryRay(threadId.xy, push.extent);

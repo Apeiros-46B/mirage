@@ -7,7 +7,7 @@ import world;
 
 // default empty
 public struct VisbufKey {
-	public uint64_t data = 0;
+	public uint64_t data;
 
 	public property bool entity {
 		get { return bitfieldExtract(this.data, 0, 1) != 0; }
