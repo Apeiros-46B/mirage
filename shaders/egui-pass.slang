@@ -1,5 +1,8 @@
+import shared.tonemap;
+
 struct PushConstants {
 	float2 scrSz;
+	uint srgbAttachment; // bool
 };
 
 [[vk::push_constant]]
@@ -43,6 +46,8 @@ VertexOutput vsh(VertexInput vi) {
 [shader("fragment")]
 float4 fsh(VertexOutput vo) : SV_Target {
 	float4 color = vo.color * sampler.Sample(vo.uv);
-	float3 srgb = pow(color.rgb, float3(2.2)); // linear -> sRGB, don't touch alpha
-	return float4(srgb, color.a);
+	if (push.srgbAttachment != 0) {
+		color.rgb = srgbToLinear(color.rgb);
+	}
+	return color;
 }

@@ -9,7 +9,7 @@ use crate::{
         task::Task,
     },
     workers::renderer::FrameCtx,
-    world::ChunkDirectory,
+    world::WorldView,
 };
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/primary-pass.spv"));
@@ -18,16 +18,11 @@ const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/primary-pass.spv"))
 #[repr(C)]
 struct PushConstants {
     camera_bda: u64, // CameraState*
-
-    nodes_bda: u64, // Node*, shared non-root node pool
-    chunk_roots_bda: u64, // Node*, indexed by chunk ID
-    chunk_metadata_bda: u64, // ChunkMetadata*
-    chunk_directory: ChunkDirectory,
+    world: WorldView,
 
     chunk_id_idx: u32,
     visbuf_idx: u32,
-    extent_x: u32,
-    extent_y: u32,
+    extent: [u32; 2],
 }
 
 pub struct PrimaryPass {
@@ -126,16 +121,14 @@ impl Task<FrameCtx<'_>> for PrimaryPass {
                 0,
                 bytemuck::bytes_of(&PushConstants {
                     camera_bda: frame.resources.camera_bda,
-
-                    nodes_bda: frame.resources.nodes_bda,
-                    chunk_roots_bda: frame.resources.chunk_roots_bda,
-                    chunk_metadata_bda: frame.resources.chunk_metadata_bda,
-                    chunk_directory: frame.resources.chunk_directory,
+                    world: frame.resources.world,
 
                     chunk_id_idx: frame.resources.chunk_id_idx,
                     visbuf_idx: frame.resources.visbuf_idx,
-                    extent_x: frame.resources.color.extent.width,
-                    extent_y: frame.resources.color.extent.height,
+                    extent: [
+                        frame.resources.color.extent.width,
+                        frame.resources.color.extent.height,
+                    ],
                 }),
             );
 

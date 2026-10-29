@@ -67,7 +67,8 @@ impl DescriptorAllocator {
                 .descriptor_count(100_000),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(STORAGE_IMG_BINDING)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE
+                           | vk::ShaderStageFlags::FRAGMENT)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(100_000),
         ];

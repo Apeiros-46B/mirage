@@ -1,5 +1,4 @@
 import shared.camera;
-import shared.space;
 import shared.world;
 
 struct PushConstants {
@@ -36,20 +35,15 @@ VertexOutput vsh(uint vertId : SV_VertexID, uint chunkIdx : SV_InstanceID) {
 		4, 0, 3, 4, 3, 7  // left   (-X)
 	};
 
-	// chunk id 0 is reserved as a sentinel for "no chunk"
+	// chunk id 0 = None sentinel
 	uint chunkId = chunkIdx + 1;
-	ChunkMetadata meta = push.chunks[chunkId];
-	RelChunkBounds bounds = RelChunkBounds(
-		meta.logicalPos(),
-		push.camera.chunkPos,
-		push.camera.localPos,
-	);
-
-	bool cameraInside = all(bounds.min <= 0.0) && all(bounds.max > 0.0);
+	let meta = push.chunks[chunkId];
+	let bounds = RelChunkBounds(meta, *push.camera);
 
 	VertexOutput vert;
 	vert.chunkId = chunkId;
-	if (cameraInside) {
+
+	if (bounds.isInside()) {
 		const float2 FULLSCREEN_TRI[3] = {
 			float2(-1, -1),
 			float2(-1,  3),
@@ -70,7 +64,6 @@ VertexOutput vsh(uint vertId : SV_VertexID, uint chunkIdx : SV_InstanceID) {
 	uint axisId = vertId / 6;
 	uint faceId;
 	bool faceVis;
-
 	if (axisId == 0) {
 		faceId  = bounds.min.x > 0.0 ? 5 : 4;
 		faceVis = bounds.min.x > 0.0 || bounds.max.x <= 0.0;

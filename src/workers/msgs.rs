@@ -12,23 +12,38 @@ use winit::{
 use crate::sync::worker::channel_routing_for;
 
 // matches shared/camera.slang::CameraState
+// all matrices act on camera-relative voxel-unit positions in world space
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 #[repr(C)]
 pub struct CameraState {
     pub rel_view_proj: Mat4,
+
+    /// includes vk Y flip and [0,1] depth
     pub inv_proj: Mat4,
+
+    /// rotation only
     pub inv_view: Mat4,
-    pub chunk_pos: IVec3,
+
+    pub signed_coord: IVec3,
     pub _chunk_pad: i32,
-    pub local_pos: Vec3,
+    pub local_coord: Vec3,
     pub _local_pad: f32,
+}
+
+impl PartialEq for CameraState {
+    fn eq(&self, other: &Self) -> bool {
+        self.signed_coord == other.signed_coord
+            && self.local_coord == other.local_coord
+            && self.inv_view == other.inv_view
+            && self.inv_proj == other.inv_proj
+            && self.rel_view_proj == other.rel_view_proj
+    }
 }
 
 pub enum AppMsg {
     SetCursorCapture(bool),
 }
 
-/// tickrate of the game loop
 pub const GAME_TICKRATE_HZ: f64 = 120.0;
 
 #[derive(Debug)]

@@ -13,6 +13,7 @@ use crate::{
         task::Task,
     },
     workers::renderer::FrameCtx,
+    world::WorldView,
 };
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/vis-pass.spv"));
@@ -26,10 +27,15 @@ pub struct VisPass {
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct PushConstants {
+    camera_bda: u64,
+    world: WorldView,
+
     visbuf_idx: u32,
     color_idx: u32,
-    extent_x: u32,
-    extent_y: u32,
+    extent: [u32; 2],
+
+    pt_accum_idx: u32,
+    sample_count: u32,
 }
 
 impl Destroy for VisPass {
@@ -120,10 +126,18 @@ impl Task<FrameCtx<'_>> for VisPass {
                 vk::ShaderStageFlags::COMPUTE,
                 0,
                 bytemuck::bytes_of(&PushConstants {
+                    camera_bda: frame.resources.camera_bda,
+                    world: frame.resources.world,
+
                     visbuf_idx: frame.resources.visbuf_idx,
                     color_idx: frame.resources.color_idx,
-                    extent_x: frame.resources.color.extent.width,
-                    extent_y: frame.resources.color.extent.height,
+                    extent: [
+                        frame.resources.color.extent.width,
+                        frame.resources.color.extent.height,
+                    ],
+
+                    pt_accum_idx: frame.resources.pt_accum_idx,
+                    sample_count: frame.resources.sample_count,
                 }),
             );
 

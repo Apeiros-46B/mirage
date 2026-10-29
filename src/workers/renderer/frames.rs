@@ -1,6 +1,6 @@
 use std::{ops::{Deref, DerefMut}, slice::{Iter, IterMut}, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use ash::{khr, vk};
 use winit::dpi::PhysicalSize;
 
@@ -52,6 +52,7 @@ pub struct RenderImage {
     pub img: vk::Image,
     pub view: vk::ImageView,
     pub extent: vk::Extent2D,
+    pub fmt: vk::Format,
 }
 
 struct SwapchainImage {
@@ -139,10 +140,7 @@ impl Swapchain {
             .image_color_space(fmt.color_space)
             .image_extent(extent)
             .image_array_layers(1)
-            .image_usage(
-                vk::ImageUsageFlags::COLOR_ATTACHMENT
-              | vk::ImageUsageFlags::TRANSFER_DST
-            )
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(caps.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
@@ -204,6 +202,7 @@ impl Swapchain {
             img: img.img,
             view: img.view,
             extent: self.extent,
+            fmt: self.fmt,
         }))
     }
 
@@ -241,14 +240,34 @@ impl Swapchain {
 
     fn choose_fmt(&self, ctx: &VulkanCtx) -> Result<vk::SurfaceFormatKHR> {
         let fmts = ctx.surf.get_fmts(&ctx.gpu)?;
-        Ok(fmts.iter()
-            .find(|f| {
-                f.format == vk::Format::B8G8R8A8_SRGB &&
-                f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
-            })
+
+        let sdr = vk::ColorSpaceKHR::SRGB_NONLINEAR;
+        if let Some(fmt) = fmts.iter()
+            .find(|f| f.format == vk::Format::UNDEFINED && f.color_space == sdr)
+        {
+            return Ok(vk::SurfaceFormatKHR {
+                format: if self.fmt == vk::Format::UNDEFINED {
+                    vk::Format::B8G8R8A8_SRGB
+                } else {
+                    self.fmt
+                },
+                ..*fmt
+            });
+        }
+
+        // prefer the existing format across resize when possible
+        for pref in [self.fmt, vk::Format::B8G8R8A8_SRGB, vk::Format::R8G8B8A8_SRGB] {
+            if let Some(fmt) = fmts.iter()
+                .find(|f| f.format == pref && f.color_space == sdr)
+            {
+                return Ok(*fmt);
+            }
+        }
+
+        fmts.iter()
+            .find(|f| f.color_space == sdr)
             .copied()
-            .unwrap_or(fmts[0])
-        )
+            .ok_or_else(|| anyhow!("surface does not support SDR sRGB presentation"))
     }
 
     fn choose_mode(&self, ctx: &VulkanCtx) -> Result<vk::PresentModeKHR> {

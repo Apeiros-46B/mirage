@@ -1071,6 +1071,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "mirage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ash",
+ "ash-window",
+ "bytemuck",
+ "egui",
+ "egui-winit",
+ "egui_plot",
+ "glam",
+ "gpu-allocator",
+ "modular-bitfield",
+ "paste",
+ "rtrb",
+ "triple_buffer",
+ "winit",
+]
+
+[[package]]
 name = "modular-bitfield"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1701,26 +1721,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce70a74e890531977d37e532c34d45e9055d2409ed08ddba14529471ed0be16"
 dependencies = [
  "bitflags 2.11.0",
-]
-
-[[package]]
-name = "reverie"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ash",
- "ash-window",
- "bytemuck",
- "egui",
- "egui-winit",
- "egui_plot",
- "glam",
- "gpu-allocator",
- "modular-bitfield",
- "paste",
- "rtrb",
- "triple_buffer",
- "winit",
 ]
 
 [[package]]

@@ -1,72 +1,97 @@
-import shared.world;
+import shared.shading;
+import shared.camera;
 import shared.raymarch;
+import shared.world;
+
+#define PATH_TRACE
+// #define DEBUG_POSITION
+// #define DEBUG_POSITION_MOD
+// #define DEBUG_FACE
+// #define DEBUG_MATERIAL
+// #define DEBUG_CHUNK
 
 struct PushConstants {
-	uint32_t visbufIdx;
-	uint32_t colorIdx;
-	uint32_t extentX;
-	uint32_t extentY;
+	CameraState* camera;
+	WorldView world;
+
+	uint visbufIdx;
+	uint colorIdx;
+	uint2 extent;
+
+	uint ptAccumIdx;
+	uint sampleCount; // accumulated samples for this view, 0 on camera change
 };
 
 [[vk::push_constant]]
 ConstantBuffer<PushConstants> push;
 
-[[vk::binding(2, 0)]] RWTexture2D<uint64_t> visbufTextures[];
-[[vk::binding(2, 0)]] RWTexture2D<float4> colorTextures[];
+[[vk::binding(2, 0)]]
+RWTexture2D<uint64_t> visbufTextures[];
 
-// #define DEBUG_POSITION
-#define DEBUG_POSITION_MOD
-// #define DEBUG_FACE
-// #define DEBUG_MATERIAL
-// #define DEBUG_CHUNK
+[[vk::binding(2, 0)]]
+[[vk::image_format("rgba32f")]]
+RWTexture2D<float4> colorTextures[];
 
-float3 hashColor(uint state) {
-	uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-	word = (word >> 22u) ^ word;
-	return float3(word & 255, word >> 8 & 255, word >> 16 & 255) / 255.0;
-}
+float3 keyToColor(uint3 threadId, VisbufKey key) {
 
-float3 faceColor(Face face) {
-	switch (face) {
-	case Face.PX: return float3(1.0, 0.0, 0.0);
-	case Face.PY: return float3(0.0, 1.0, 0.0);
-	case Face.PZ: return float3(0.0, 0.0, 1.0);
-	case Face.NX: return float3(0.0, 1.0, 1.0);
-	case Face.NY: return float3(1.0, 0.0, 1.0);
-	case Face.NZ: return float3(1.0, 1.0, 0.0);
-	default: return float3(1.0);
+#if defined(PATH_TRACE)
+
+	float3 color = tracePath(
+		push.world, *push.camera, key,
+		threadId.xy, push.extent,
+		push.sampleCount,
+	);
+	let ptAccum = colorTextures[push.ptAccumIdx];
+
+	// do not load undefined contents on the first sample
+	if (push.sampleCount != 0) {
+		float weight = 1.0 / (float(push.sampleCount) + 1.0);
+		color = lerp(ptAccum.Load(threadId.xy).rgb, color, weight);
 	}
-}
 
-float3 keyToColor(VisbufKey key) {
-	if (key.matId == 0) return float3(1.0);
+	ptAccum.Store(threadId.xy, float4(color, 1.0));
+	return color;
 
+#else
+
+// {{{ debug
+	if (!key.isHit()) return float3(1.0);
 #if defined(DEBUG_POSITION)
 	return float3(key.x, key.y, key.z) / 255.0;
 #elif defined(DEBUG_POSITION_MOD)
 	return float3(key.x % 16, key.y % 16, key.z % 16) * 16.0 / 255.0;
 #elif defined(DEBUG_FACE)
-	return faceColor(key.face);
+	switch (key.face) {
+		case Face.PX: return float3(1.0, 0.0, 0.0);
+		case Face.PY: return float3(0.0, 1.0, 0.0);
+		case Face.PZ: return float3(0.0, 0.0, 1.0);
+		case Face.NX: return float3(0.0, 1.0, 1.0);
+		case Face.NY: return float3(1.0, 0.0, 1.0);
+		case Face.NZ: return float3(1.0, 1.0, 0.0);
+		default: return float3(1.0);
+	}
 #elif defined(DEBUG_MATERIAL)
-	return hashColor(key.matId);
+	return randColor(Material(key.voxelValue).id);
 #elif defined(DEBUG_CHUNK)
-	return hashColor(key.chunkId);
+	return randColor(key.chunkId);
 #else
 	return float3(0.9);
 #endif
+// }}}
+
+#endif
+
 }
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 threadId : SV_DispatchThreadID) {
-	if (threadId.x >= push.extentX || threadId.y >= push.extentY) {
-		return;
-	}
+	if (any(threadId.xy >= push.extent)) return;
 
 	RWTexture2D<uint64_t> visbufTex = visbufTextures[push.visbufIdx];
 	RWTexture2D<float4> colorTex = colorTextures[push.colorIdx];
 
 	VisbufKey key;
 	key.data = visbufTex.Load(threadId.xy);
-	colorTex.Store(threadId.xy, float4(pow(keyToColor(key), 2.2), 1.0));
+	colorTex.Store(threadId.xy, float4(keyToColor(threadId, key), 1.0));
 }

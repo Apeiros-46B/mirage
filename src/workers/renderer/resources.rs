@@ -1,3 +1,6 @@
+// TODO: the accumulation is really messy here, probably need something better later.
+// with more complex graphical techniques keeping cross-frame state we may need a
+// better abstraction for specifically that (probably integrated into a render graph)
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -18,11 +21,12 @@ use crate::{
     },
     world::{
         CHUNK_N,
+        REALM_N,
         ChunkDirectory,
         ChunkDirectoryData,
         ChunkMetadata,
         Node,
-        REALM_N,
+        WorldView,
     },
 };
 
@@ -117,9 +121,16 @@ pub struct Resources {
     visbuf: PerFrame<AllocatedImage>,
     visbuf_idxs: PerFrame<u32>,
 
+    pt_accum: AllocatedImage,
+    pt_accum_idx: u32,
+    pt_accum_init: bool,
+    sample_count: u32,
+
     camera_rx: Output<CameraState>,
+    prev_camera: Option<CameraState>,
 
     pub nodes: AllocatedMegabuffer,
+    pub voxel_data: AllocatedMegabuffer,
     pub chunk_headers: ChunkHeaders,
     pub chunk_directory: ChunkDirectoryBuffer,
 }
@@ -129,12 +140,14 @@ impl Destroy for Resources {
         unsafe {
             self.chunk_directory.destroy(ctx);
             self.chunk_headers.destroy(ctx);
+            self.voxel_data.destroy(ctx);
             self.nodes.destroy(ctx);
 
             self.depth.destroy(ctx);
             self.chunk_id.destroy(ctx);
             self.color.destroy(ctx);
             self.visbuf.destroy(ctx);
+            self.pt_accum.destroy(ctx);
 
             self.desc.destroy(ctx);
         }
@@ -147,6 +160,8 @@ impl Resources {
         scr_sz: PhysicalSize<u32>,
         camera_rx: Output<CameraState>,
         directory: &ChunkDirectoryData,
+        // TODO(loader): dynamic voxel value buffer size
+        voxel_words_n: usize,
     ) -> Result<Self> {
         let extent = vk::Extent2D { width: scr_sz.width, height: scr_sz.height };
 
@@ -154,11 +169,17 @@ impl Resources {
         let chunk_id = make_chunk_id_targets(&ctx, extent)?;
         let color = make_color_targets(&ctx, extent)?;
         let visbuf = make_visbuf_targets(&ctx, extent)?;
+        let pt_accum = make_pt_accum_target(&ctx, extent)?;
 
         let nodes = AllocatedMegabuffer::new_alloc(
             &ctx,
             (1 << 22) * 16, // temporary size, TODO: allocate large heap and suballoc
             c"nodes",
+        )?;
+        let voxel_data = AllocatedMegabuffer::new_alloc(
+            &ctx,
+            (voxel_words_n.max(1) * size_of::<u32>()) as u64,
+            c"voxel_data",
         )?;
         let chunk_headers = ChunkHeaders::new(&ctx)?;
         let chunk_directory = ChunkDirectoryBuffer::new(&ctx, directory)?;
@@ -167,6 +188,7 @@ impl Resources {
         let chunk_id_idxs = desc.alloc_sampled_imgs(&chunk_id).into();
         let color_idxs = desc.alloc_storage_imgs(&color).into();
         let visbuf_idxs = desc.alloc_storage_imgs(&visbuf).into();
+        let [pt_accum_idx] = desc.alloc_storage_imgs(std::array::from_ref(&pt_accum));
 
         Ok(Self {
             desc,
@@ -179,11 +201,18 @@ impl Resources {
             visbuf,
             visbuf_idxs,
 
-            nodes,
-            chunk_headers,
-            chunk_directory,
+            pt_accum,
+            pt_accum_idx,
+            pt_accum_init: false,
+            sample_count: 0,
 
             camera_rx,
+            prev_camera: None,
+
+            nodes,
+            voxel_data,
+            chunk_headers,
+            chunk_directory,
         })
     }
 
@@ -207,22 +236,50 @@ impl Resources {
             self.visbuf.destroy(ctx);
             self.visbuf = make_visbuf_targets(ctx, extent)?;
             self.desc.update_storage_imgs(self.visbuf_idxs[0], &self.visbuf);
+
+            self.pt_accum.destroy(ctx);
+            self.pt_accum = make_pt_accum_target(ctx, extent)?;
+            self.desc.update_storage_imgs(self.pt_accum_idx, std::array::from_ref(&self.pt_accum));
+            self.pt_accum_init = false;
         }
+
+        self.prev_camera = None;
+        self.sample_count = 0;
 
         Ok(())
     }
 
     pub fn view(&mut self, target: &mut RenderTarget<'_>, num_chunks: u32) -> ResourceView<'_> {
+        let camera = *self.camera_rx.read();
+
+        self.sample_count = if self.prev_camera == Some(camera) {
+            self.sample_count.saturating_add(1)
+        } else {
+            0
+        };
+        self.prev_camera = Some(camera);
+
         let mut camera_buf = target.arena.alloc_scratch::<CameraState>();
-        camera_buf.write(self.camera_rx.read());
+        camera_buf.write(&camera);
+
+        let pt_accum_init = self.pt_accum_init;
+        self.pt_accum_init = true;
 
         ResourceView {
             camera_bda: camera_buf.bda,
+            sample_count: self.sample_count,
+            pt_accum: &self.pt_accum,
+            pt_accum_idx: self.pt_accum_idx,
+            pt_accum_init,
 
-            nodes_bda: self.nodes.bda,
-            chunk_metadata_bda: self.chunk_headers.metadata.bda,
-            chunk_roots_bda: self.chunk_headers.roots.bda,
-            chunk_directory: self.chunk_directory.directory(),
+            // TODO: store WorldView directly instead of recreating every time?
+            world: WorldView {
+                roots: self.chunk_headers.roots.bda,
+                nodes: self.nodes.bda,
+                values: self.voxel_data.bda,
+                chunk_meta: self.chunk_headers.metadata.bda,
+                chunk_dir: self.chunk_directory.directory(),
+            },
             num_chunks,
 
             depth: &self.depth[target.idx],
@@ -239,12 +296,13 @@ impl Resources {
 pub struct ResourceView<'a> {
     // dynamic
     pub camera_bda: u64, // BDA pointer to CameraState
+    pub sample_count: u32,
+    pub pt_accum: &'a AllocatedImage,
+    pub pt_accum_idx: u32,
+    pub pt_accum_init: bool,
 
-    // world buffer BDAs (handles stay on Resources for staging)
-    pub nodes_bda: u64,
-    pub chunk_metadata_bda: u64,
-    pub chunk_roots_bda: u64,
-    pub chunk_directory: ChunkDirectory,
+    // world
+    pub world: WorldView,
     pub num_chunks: u32,
 
     // per frame
@@ -258,28 +316,52 @@ pub struct ResourceView<'a> {
 }
 
 impl<'a, 'b> ResourceView<'a> {
+    /// barrier stub
     pub fn depth_barrier(&self) -> vk::ImageMemoryBarrier2<'b> {
         vk::ImageMemoryBarrier2::default()
             .image(self.depth.img)
             .subresource_range(DEPTH_SUBRES_RANGE)
     }
 
+    /// barrier stub
     pub fn chunk_id_barrier(&self) -> vk::ImageMemoryBarrier2<'b> {
         vk::ImageMemoryBarrier2::default()
             .image(self.chunk_id.img)
             .subresource_range(COLOR_SUBRES_RANGE)
     }
 
+    /// barrier stub
     pub fn color_barrier(&self) -> vk::ImageMemoryBarrier2<'b> {
         vk::ImageMemoryBarrier2::default()
             .image(self.color.img)
             .subresource_range(COLOR_SUBRES_RANGE)
     }
 
+    /// barrier stub
     pub fn visbuf_barrier(&self) -> vk::ImageMemoryBarrier2<'b> {
         vk::ImageMemoryBarrier2::default()
             .image(self.visbuf.img)
             .subresource_range(COLOR_SUBRES_RANGE)
+    }
+
+    /// full barrier for path tracing accumulator texture
+    pub fn pt_accum_barrier(&self) -> vk::ImageMemoryBarrier2<'b> {
+        vk::ImageMemoryBarrier2::default()
+            .image(self.pt_accum.img)
+            .subresource_range(COLOR_SUBRES_RANGE)
+            .old_layout(if self.pt_accum_init {
+                vk::ImageLayout::GENERAL
+            } else {
+                vk::ImageLayout::UNDEFINED
+            })
+            .new_layout(vk::ImageLayout::GENERAL)
+            // cover prev submissions too, including frames still in flight
+            .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_READ
+                           | vk::AccessFlags2::SHADER_STORAGE_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_READ
+                           | vk::AccessFlags2::SHADER_STORAGE_WRITE)
     }
 }
 
@@ -339,8 +421,9 @@ fn make_color_targets(
         AllocatedImage::new(
             ctx,
             extent.into(),
-            vk::Format::R8G8B8A8_UNORM,
-            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+            // linear HDR
+            vk::Format::R32G32B32A32_SFLOAT,
+            vk::ImageUsageFlags::STORAGE,
             COLOR_SUBRES_RANGE,
             c"color target",
         )
@@ -361,4 +444,15 @@ fn make_visbuf_targets(
             c"visbuf target",
         )
     })
+}
+
+fn make_pt_accum_target(ctx: &VulkanCtx, extent: vk::Extent2D) -> Result<AllocatedImage> {
+    AllocatedImage::new(
+        ctx,
+        extent.into(),
+        vk::Format::R32G32B32A32_SFLOAT,
+        vk::ImageUsageFlags::STORAGE,
+        COLOR_SUBRES_RANGE,
+        c"accumulation target",
+    )
 }

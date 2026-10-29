@@ -7,7 +7,7 @@
 //! - collect pass: build deduplicated list of voxel IDs
 //! - shade pass: dispatch shading per visible voxel (not per pixel)
 //! - resolve pass: apply colors to visbuf based on shading results
-//! - blit pass: blit shaded image to swapchain
+//! - post pass: encode srgb to swapchain (TODO: tonemapping, bloom, other such stuff)
 //! - egui pass: draw ui
 mod frames;
 mod passes;
@@ -95,6 +95,7 @@ impl Worker for Renderer {
             init.sz,
             init.camera_rx,
             &world.chunk_directory,
+            world.voxel_data.len(),
         )?;
         let passes = Passes::new(&ctx, &resources, manager.swapchain.fmt)?;
 
@@ -131,20 +132,32 @@ impl Worker for Renderer {
             unsafe {
                 this.ctx.dev.device_wait_idle()?;
                 this.resources.resize(&this.ctx, target.img.extent)?;
+                this.passes.set_fmt(&this.ctx, &this.resources, target.img.fmt)?;
             }
         }
 
         // TODO(loader): remove this when chunk streaming is in
         if let Some(world) = this.pending_world.take() {
             unsafe {
-                let nodes_stage = target.arena.stage_slice(&world.nodes);
+                if !world.nodes.is_empty() {
+                    let nodes_stage = target.arena.stage_slice(&world.nodes);
+                    this.ctx.dev.cmd_copy_buffer(
+                        target.cmd,
+                        target.arena.buf,
+                        this.resources.nodes.buf,
+                        &[this.resources.nodes.copy_from(&nodes_stage)],
+                    );
+                }
 
-                this.ctx.dev.cmd_copy_buffer(
-                    target.cmd,
-                    target.arena.buf,
-                    this.resources.nodes.buf,
-                    &[this.resources.nodes.copy_from(&nodes_stage)],
-                );
+                if !world.voxel_data.is_empty() {
+                    let voxel_data_stage = target.arena.stage_slice(&world.voxel_data);
+                    this.ctx.dev.cmd_copy_buffer(
+                        target.cmd,
+                        target.arena.buf,
+                        this.resources.voxel_data.buf,
+                        &[this.resources.voxel_data.copy_from(&voxel_data_stage)],
+                    );
+                }
 
                 let roots_stage = target.arena.stage_slice(&world.chunk_roots);
                 let meta_stage = target.arena.stage_slice(&world.chunk_metadata);

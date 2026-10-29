@@ -2,6 +2,7 @@ use std::{collections::HashMap, mem};
 
 use anyhow::Result;
 use ash::vk;
+use bytemuck::{Pod, Zeroable};
 use egui::{ClippedPrimitive, TextureId, TexturesDelta, epaint::Vertex};
 use winit::dpi::PhysicalSize;
 
@@ -21,6 +22,13 @@ use crate::{
 
 const SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/egui-pass.spv"));
 
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct PushConstants {
+    screen_size: [f32; 2],
+    atmt_is_srgb: u32, // bool
+}
+
 pub struct EguiPass {
     primitives: Vec<ClippedPrimitive>,
     screen_sz_px: PhysicalSize<u32>,
@@ -34,6 +42,7 @@ pub struct EguiPass {
     desc_set_layout: vk::DescriptorSetLayout,
     desc_pool: vk::DescriptorPool,
     sampler: vk::Sampler,
+    atmt_is_srgb: bool,
 
     // images are guaranteed to never exist in both of these collections at once
     textures: HashMap<TextureId, (AllocatedImage, vk::DescriptorSet)>,
@@ -60,13 +69,7 @@ impl Destroy for EguiPass {
 }
 
 impl EguiPass {
-    // TODO: handle format changing (e.g. user moving app between monitors)
-    // probably needs new Task method and refactor of presenter
     pub fn new(ctx: &VulkanCtx, fmt: vk::Format) -> Result<Self> {
-        let code = ash::util::read_spv(&mut std::io::Cursor::new(SPV))?;
-        let shader_info = vk::ShaderModuleCreateInfo::default().code(&code);
-        let module = unsafe { ctx.dev.create_shader_module(&shader_info, None)? };
-
         // sampler
         let sampler_info = vk::SamplerCreateInfo::default()
             .mag_filter(vk::Filter::LINEAR)
@@ -99,15 +102,42 @@ impl EguiPass {
         let desc_pool = unsafe { ctx.dev.create_descriptor_pool(&pool_info, None)? };
 
         let push_range = vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
-            .size(8); // float2 (8 bytes)
+            .size(mem::size_of::<PushConstants>() as u32);
 
         let layout_info = vk::PipelineLayoutCreateInfo::default()
             .push_constant_ranges(std::slice::from_ref(&push_range))
             .set_layouts(std::slice::from_ref(&desc_set_layout));
         let layout = unsafe { ctx.dev.create_pipeline_layout(&layout_info, None)? };
         // }}}
+
+        let pipeline = Self::create_pipeline(ctx, fmt, layout)?;
+
+        Ok(Self {
+            primitives: Vec::new(),
+            screen_sz_px: winit::dpi::PhysicalSize::new(0, 0),
+            px_per_pt: 1.0,
+
+            textures_delta: Default::default(),
+
+            pipeline,
+            pipeline_layout: layout,
+            desc_set_layout,
+            desc_pool,
+            sampler,
+            atmt_is_srgb: super::is_srgb_format(fmt),
+
+            textures: HashMap::new(),
+            unused_textures: PerFrame::init(|_| Vec::new()),
+            unused_desc_sets: PerFrame::init(|_| Vec::new()),
+        })
+    }
+
+    fn create_pipeline(ctx: &VulkanCtx, fmt: vk::Format, layout: vk::PipelineLayout) -> Result<vk::Pipeline> {
+        let code = ash::util::read_spv(&mut std::io::Cursor::new(SPV))?;
+        let shader_info = vk::ShaderModuleCreateInfo::default().code(&code);
+        let module = unsafe { ctx.dev.create_shader_module(&shader_info, None)? };
 
         // {{{ vertex input
         let bind_desc = vk::VertexInputBindingDescription::default()
@@ -202,34 +232,37 @@ impl EguiPass {
             .layout(layout)
             .push_next(&mut rendering_info);
 
-        let pipeline = unsafe {
+        let res = unsafe {
             ctx.dev.create_graphics_pipelines(
                 vk::PipelineCache::null(),
                 std::slice::from_ref(&pipeline_info),
                 None,
-            ).map_err(|(_, err)| err)?[0]
+            )
         };
 
         unsafe { ctx.dev.destroy_shader_module(module, None) };
         // }}}
 
-        Ok(Self {
-            primitives: Vec::new(),
-            screen_sz_px: winit::dpi::PhysicalSize::new(0, 0),
-            px_per_pt: 1.0,
+        match res {
+            Ok(pipelines) => Ok(pipelines[0]),
+            Err((pipelines, err)) => {
+                for pipeline in pipelines {
+                    unsafe { ctx.dev.destroy_pipeline(pipeline, None); }
+                }
+                Err(err.into())
+            }
+        }
+    }
 
-            textures_delta: Default::default(),
+    /// replaces pipeline. caller must wait for in-flight frames before calling
+    pub unsafe fn set_format(&mut self, ctx: &VulkanCtx, fmt: vk::Format) -> Result<()> {
+        let pipeline = Self::create_pipeline(ctx, fmt, self.pipeline_layout)?;
+        unsafe { ctx.dev.destroy_pipeline(self.pipeline, None); }
 
-            pipeline,
-            pipeline_layout: layout,
-            desc_set_layout,
-            desc_pool,
-            sampler,
+        self.pipeline = pipeline;
+        self.atmt_is_srgb = super::is_srgb_format(fmt);
 
-            textures: HashMap::new(),
-            unused_textures: PerFrame::init(|_| Vec::new()),
-            unused_desc_sets: PerFrame::init(|_| Vec::new()),
-        })
+        Ok(())
     }
 }
 
@@ -495,15 +528,18 @@ impl Task<FrameCtx<'_>> for EguiPass {
             ctx.dev.cmd_set_viewport(cmd, 0, std::slice::from_ref(&viewport));
         }
 
-        let push = [
-            frame.in_flight.img.extent.width as f32 / self.px_per_pt,
-            frame.in_flight.img.extent.height as f32 / self.px_per_pt,
-        ];
+        let push = PushConstants {
+            screen_size: [
+                frame.in_flight.img.extent.width as f32 / self.px_per_pt,
+                frame.in_flight.img.extent.height as f32 / self.px_per_pt,
+            ],
+            atmt_is_srgb: u32::from(self.atmt_is_srgb),
+        };
         unsafe {
             ctx.dev.cmd_push_constants(
                 cmd,
                 self.pipeline_layout,
-                vk::ShaderStageFlags::VERTEX,
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                 0,
                 bytemuck::bytes_of(&push),
             );

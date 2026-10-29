@@ -7,26 +7,31 @@ use crate::{
     workers::msgs::EguiUpdate,
 };
 use super::{FrameCtx, resources::Resources};
-use blit::BlitPass;
+
 use depth::DepthPrepass;
 use egui::EguiPass;
 use frame::ClearPass;
+use post::PostPass;
 use primary::PrimaryPass;
 use vis::VisPass;
 
-pub mod blit;
 pub mod depth;
 pub mod egui;
 pub mod frame;
+pub mod post;
 pub mod primary;
-pub mod vis; // debug visualization of visbuf
+
+// may replace with collect/shade passes later. probably need to be able to
+// swap collect/shade both for just vis, for per-pixel debug visualizations
+pub mod vis;
 
 pub struct Passes {
+    swap_fmt: vk::Format,
     clear_pass: ClearPass,
     depth_prepass: DepthPrepass,
     primary_pass: PrimaryPass,
     vis_pass: VisPass,
-    blit_pass: BlitPass,
+    post_pass: PostPass,
     egui_pass: EguiPass,
 }
 
@@ -34,7 +39,7 @@ impl Destroy for Passes {
     unsafe fn destroy(&mut self, ctx: &VulkanCtx) {
         unsafe {
             self.egui_pass.destroy(ctx);
-            self.blit_pass.destroy(ctx);
+            self.post_pass.destroy(ctx);
             self.vis_pass.destroy(ctx);
             self.primary_pass.destroy(ctx);
             self.depth_prepass.destroy(ctx);
@@ -51,14 +56,38 @@ impl Passes {
     ) -> Result<Self> {
         let bind_info = resources.desc.get_bind_info();
         Ok(Self {
+            swap_fmt,
             clear_pass: ClearPass,
             depth_prepass: DepthPrepass::new(&ctx)?,
             primary_pass: PrimaryPass::new(&ctx, &bind_info)?,
             vis_pass: VisPass::new(&ctx, &bind_info)?,
-            blit_pass: BlitPass,
+            post_pass: PostPass::new(ctx, &bind_info, swap_fmt)?,
             egui_pass: EguiPass::new(&ctx, swap_fmt)?,
         })
     }
+
+    /// called after swapchain recreation with all previous GPU work complete
+    pub unsafe fn set_fmt(
+        &mut self,
+        ctx: &VulkanCtx,
+        resources: &Resources,
+        fmt: vk::Format,
+    ) -> Result<()> {
+        if self.swap_fmt == fmt { return Ok(()); }
+
+        let mut post = PostPass::new(ctx, &resources.desc.get_bind_info(), fmt)?;
+
+        if let Err(err) = unsafe { self.egui_pass.set_format(ctx, fmt) } {
+            unsafe { post.destroy(ctx); }
+            return Err(err);
+        }
+        unsafe { self.post_pass.destroy(ctx); }
+
+        self.post_pass = post;
+        self.swap_fmt = fmt;
+        Ok(())
+    }
+
 }
 
 impl MessageHandler<EguiUpdate> for Passes {
@@ -129,28 +158,32 @@ impl Task<FrameCtx<'_>> for Passes {
                 vk::AccessFlags2::SHADER_WRITE,
             );
         visbuf_barrier.transition(
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::ImageLayout::GENERAL,
             vk::PipelineStageFlags2::COMPUTE_SHADER,
             vk::AccessFlags2::SHADER_READ,
         );
         unsafe {
-            ctx.barrier(cmd, [visbuf_barrier, color_barrier]);
+            ctx.barrier(cmd, [
+                visbuf_barrier,
+                color_barrier,
+                frame.resources.pt_accum_barrier(),
+            ]);
             self.vis_pass.execute(&ctx, frame)?;
         }
 
         color_barrier.transition(
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            vk::PipelineStageFlags2::BLIT,
-            vk::AccessFlags2::TRANSFER_READ,
+            vk::ImageLayout::GENERAL,
+            vk::PipelineStageFlags2::FRAGMENT_SHADER,
+            vk::AccessFlags2::SHADER_STORAGE_READ,
         );
         swap_barrier.transition(
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::PipelineStageFlags2::BLIT,
-            vk::AccessFlags2::TRANSFER_WRITE,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+            vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
         );
         unsafe {
             ctx.barrier(cmd, [color_barrier, swap_barrier]);
-            self.blit_pass.execute(&ctx, frame)?;
+            self.post_pass.execute(&ctx, frame)?;
         }
 
         swap_barrier.transition(
@@ -175,4 +208,14 @@ impl Task<FrameCtx<'_>> for Passes {
 
         Ok(())
     }
+}
+
+// only sRGB attachment formats apply the encoding in hardware
+fn is_srgb_format(fmt: vk::Format) -> bool {
+    matches!(fmt,
+        vk::Format::R8_SRGB | vk::Format::R8G8_SRGB |
+        vk::Format::R8G8B8_SRGB | vk::Format::B8G8R8_SRGB |
+        vk::Format::R8G8B8A8_SRGB | vk::Format::B8G8R8A8_SRGB |
+        vk::Format::A8B8G8R8_SRGB_PACK32
+    )
 }

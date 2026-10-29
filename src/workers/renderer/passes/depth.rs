@@ -181,7 +181,7 @@ impl Task<FrameCtx<'_>> for DepthPrepass {
                 0,
                 bytemuck::bytes_of(&PushConstants {
                     camera_bda: frame.resources.camera_bda,
-                    chunk_metadata_bda: frame.resources.chunk_metadata_bda,
+                    chunk_metadata_bda: frame.resources.world.chunk_meta,
                 }),
             );
 

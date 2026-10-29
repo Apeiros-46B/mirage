@@ -11,12 +11,12 @@ const UP_DIR: Vec3 = Vec3::new(0.0, 1.0, 0.0);
 const BASE_SPEED: f32 = 50.0;
 const BASE_ROT_SPEED: f32 = 0.005;
 
-const DEFAULT_CHUNK_POS: IVec3 = IVec3::new(
+const DEFAULT_SIGNED_COORD: IVec3 = IVec3::new(
     MAX_CHUNK_COORD,
     MAX_CHUNK_COORD,
-    MAX_CHUNK_COORD + 2,
+    MAX_CHUNK_COORD + 1,
 );
-const DEFAULT_LOCAL_POS: Vec3 = Vec3::new(128.0, 128.0, 0.0);
+const DEFAULT_LOCAL_COORD: Vec3 = Vec3::new(127.5, 127.5, 127.5);
 const DEFAULT_YAW: f32 = -std::f32::consts::FRAC_PI_2; // facing -Z
 const DEFAULT_PITCH: f32 = 0.0;
 
@@ -28,8 +28,8 @@ pub struct Camera {
     near_clip: f32,
     far_clip: f32,
 
-    pub chunk_pos: IVec3,
-    pub local_pos: Vec3,
+    pub signed_coord: IVec3,
+    pub local_coord: Vec3,
     pub forward_dir: Vec3,
 
     pub pitch: f32,
@@ -54,8 +54,8 @@ impl Camera {
             near_clip,
             far_clip,
 
-            chunk_pos: DEFAULT_CHUNK_POS,
-            local_pos: DEFAULT_LOCAL_POS,
+            signed_coord: DEFAULT_SIGNED_COORD,
+            local_coord: DEFAULT_LOCAL_COORD,
             forward_dir: Vec3::ZERO,
             pitch: DEFAULT_PITCH,
             yaw: DEFAULT_YAW,
@@ -81,13 +81,14 @@ impl Camera {
             rel_view_proj: self.proj * self.view,
             inv_proj: self.inv_proj,
             inv_view: self.inv_view,
-            chunk_pos: self.chunk_pos,
+            signed_coord: self.signed_coord,
             _chunk_pad: 0,
-            local_pos: self.local_pos,
+            local_coord: self.local_coord,
             _local_pad: 0.0,
         }
     }
 
+    /// vertical fov in radians
     pub fn set_fov(&mut self, new_fov: f32) {
         if (new_fov - self.vertical_fov).abs() <= f32::EPSILON {
             return;
@@ -109,6 +110,9 @@ impl Camera {
             self.near_clip,
             self.far_clip,
         );
+        // vk uses positive-height viewport, fb +Y is down
+        // flip proj Y once, invproj then gives correct primary rays
+        self.proj.y_axis.y = -self.proj.y_axis.y;
         self.inv_proj = self.proj.inverse();
     }
 
@@ -117,14 +121,15 @@ impl Camera {
         self.inv_view = self.view.inverse();
     }
 
-    // might not be great if delta is large, use a small delta
+    /// delta in world-space voxel units
+    /// keep displacements small to maintain local float prec
     fn translate(&mut self, delta: Vec3) {
         let chunk_side = CHUNK_SIDE as f32;
-        self.local_pos += delta;
+        self.local_coord += delta;
 
-        let chunk_delta = (self.local_pos / chunk_side).floor().as_ivec3();
-        self.chunk_pos += chunk_delta;
-        self.local_pos -= chunk_delta.as_vec3() * chunk_side;
+        let chunk_delta = (self.local_coord / chunk_side).floor().as_ivec3();
+        self.signed_coord += chunk_delta;
+        self.local_coord -= chunk_delta.as_vec3() * chunk_side;
     }
 
     fn recalc_forward(&mut self) {
@@ -146,7 +151,8 @@ impl Polled for Camera {
 
         if delta.0 != 0.0 || delta.1 != 0.0 {
             self.yaw += delta.0 * BASE_ROT_SPEED;
-            self.pitch += delta.1 * BASE_ROT_SPEED;
+            // mouse +Y = down, positive pitch looks to world +Y
+            self.pitch -= delta.1 * BASE_ROT_SPEED;
 
             // prevent camera flipping
             let max_pitch = std::f32::consts::FRAC_PI_2 - 0.01;
@@ -176,11 +182,10 @@ impl Polled for Camera {
             moving = true;
         }
 
-        // has to be inverse for some reason... idk why. probably a coordspc issue
-        if input.is_pressed(InputBtn::MoveDown) {
+        if input.is_pressed(InputBtn::MoveUp) {
             self.translate(UP_DIR * speed * dt);
             moving = true;
-        } else if input.is_pressed(InputBtn::MoveUp) {
+        } else if input.is_pressed(InputBtn::MoveDown) {
             self.translate(-UP_DIR * speed * dt);
             moving = true;
         }
